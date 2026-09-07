@@ -1,0 +1,23 @@
+{
+    auto_https off
+}
+
+:80 {
+    log {
+        output stdout
+        format json
+    }
+
+    handle /api/v3/* {
+        reverse_proxy api:8080
+    }
+
+    handle /landing/* {
+        uri strip_prefix /landing
+        reverse_proxy landing:3000
+    }
+
+    handle /* {
+        reverse_proxy web:3000
+    }
+}

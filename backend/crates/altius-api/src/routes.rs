@@ -17,6 +17,7 @@ use altius_core::{Coordinate, DeviceEvent, Role, Task};
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v3/health", get(health))
+        .route("/api/v3/ready", get(ready))
         .route("/api/v3/auth/login", post(login))
         .route("/api/v3/auth/refresh", post(refresh))
         .route("/api/v3/auth/me", get(me))
@@ -77,6 +78,19 @@ async fn health(State(s): State<Arc<AppState>>) -> Json<Value> {
         "maps_mode": format!("{:?}", s.config.google_route_mode).to_lowercase(),
         "agent": s.config.openrouter_api_key.is_some(),
     }))
+}
+
+async fn ready(State(s): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+    let persistence = if let Some(st) = &s.store {
+        st.ping().await
+    } else {
+        false
+    };
+    if persistence {
+        Ok(Json(json!({"status": "ok", "service": "altius-api", "ready": true })))
+    } else {
+        Err(ApiError::Unavailable("persistence not ready".into()))
+    }
 }
 
 #[derive(serde::Deserialize)]
