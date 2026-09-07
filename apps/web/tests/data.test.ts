@@ -1,19 +1,30 @@
 import { describe, it, expect } from "vitest";
-import { createFixtures } from "@/data/fixtures";
-import { stateSchema } from "@/data/model";
+import { stateSchema, createEmptyState } from "@/data/model";
+import type { DemoTask } from "@/data/model";
 import { createLocalAdapter, filterTasks, validateTask, csvCell, tasksCsv, STORAGE_KEY } from "@/data/adapter";
 import { translate } from "@/lib/i18n";
 import { VIEW_PATHS } from "@/lib/routes";
 
 const memoryStorage = () => { const map = new Map<string, string>(); return { getItem: (k: string) => map.get(k) ?? null, setItem: (k: string, v: string) => { map.set(k, v); }, removeItem: (k: string) => { map.delete(k); } }; };
 
-describe("fixtures + schema", () => {
-  it("fixtures validate against state schema", () => {
-    expect(() => stateSchema.parse(createFixtures())).not.toThrow();
+const sampleTask = (overrides: Partial<DemoTask> = {}): DemoTask => ({
+  id: "ALT-001", title: "Sample task", address: "Jl. Sudirman", hub: "Jakarta", flow: "Delivery",
+  assignee: "Adi Pratama", status: "assigned", date: "2026-09-07", time: "08:00", priority: "Normal",
+  notes: "", ...overrides,
+});
+
+const sampleTasks: DemoTask[] = [
+  sampleTask({ hub: "Jakarta", status: "completed" }),
+  sampleTask({ id: "ALT-002", hub: "Jakarta", status: "assigned" }),
+  sampleTask({ id: "ALT-003", hub: "Bandung" }),
+];
+
+describe("empty state + schema", () => {
+  it("empty state validates against state schema", () => {
+    expect(() => stateSchema.parse(createEmptyState())).not.toThrow();
   });
-  it("fixtures contain all required record kinds", () => {
-    const kinds = new Set(createFixtures().records.map(r => r.kind));
-    for (const kind of ["user", "team", "hub", "customer", "datatype", "schedule", "automation", "workflow", "module", "invoice"]) expect(kinds.has(kind), kind).toBe(true);
+  it("empty state has no records", () => {
+    expect(createEmptyState().records).toHaveLength(0);
   });
 });
 
@@ -31,14 +42,13 @@ describe("local adapter", () => {
 
 describe("task filtering + validation", () => {
   it("filters by hub, status, assignee, search", () => {
-    const state = createFixtures();
-    const jakarta = filterTasks(state.tasks, { hub: "Jakarta" });
+    const jakarta = filterTasks(sampleTasks, { hub: "Jakarta" });
     expect(jakarta.every(t => t.hub === "Jakarta")).toBe(true);
-    expect(filterTasks(state.tasks, { hub: "Jakarta", status: "completed" }).every(t => t.status === "completed")).toBe(true);
-    expect(filterTasks(state.tasks, { hub: "Jakarta", search: "no-such-thing" })).toHaveLength(0);
+    expect(filterTasks(sampleTasks, { hub: "Jakarta", status: "completed" }).every(t => t.status === "completed")).toBe(true);
+    expect(filterTasks(sampleTasks, { hub: "Jakarta", search: "no-such-thing" })).toHaveLength(0);
   });
   it("rejects status change without assignee", () => {
-    const task = { ...createFixtures().tasks[0], assignee: "", status: "in-progress" as const };
+    const task = { ...sampleTasks[0], assignee: "", status: "in-progress" as const };
     expect(() => validateTask(task)).toThrow(/assign/i);
   });
 });
@@ -49,7 +59,7 @@ describe("csv export", () => {
     expect(csvCell('say "hi"')).toBe('"say ""hi"""');
   });
   it("exports header + rows", () => {
-    const csv = tasksCsv(createFixtures().tasks.slice(0, 2));
+    const csv = tasksCsv(sampleTasks.slice(0, 2));
     expect(csv.split("\r\n")).toHaveLength(3);
   });
 });

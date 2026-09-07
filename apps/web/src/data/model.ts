@@ -29,3 +29,21 @@ export const STATUS_LABELS: Record<DemoTaskStatus, string> = { unassigned: "Unas
 export const FLOWS = ["Delivery", "Pickup", "House inspection", "Field sales", "Home cleaning", "Field canvassing"];
 export const DRIVERS = ["Adi Pratama", "Nadia Putri", "Rizky Saputra", "Sari Wibowo"];
 export const DEMO_DATE = "2026-09-07";
+
+export const createEmptyState = (overrides?: Partial<DemoState>): DemoState => ({
+  version: 1,
+  tasks: [],
+  records: [],
+  hub: "",
+  role: "Admin",
+  session: false,
+  locale: "en",
+  routeConfig: { speed: 40, service: 20, capacity: 500, returnHub: true, avoidTolls: false, vehicles: [] },
+  selectedVisits: [],
+  routeGenerated: false,
+  reviews: {},
+  workflow: [],
+  permissions: {},
+  organization: { name: "", currency: "IDR", passwordDays: "90" },
+  ...overrides,
+});

@@ -3,7 +3,7 @@
 import type { DemoAdapter } from "./adapter";
 import { createLocalAdapter } from "./adapter";
 import type { DemoState, DemoTask, DemoTaskStatus } from "./model";
-import { createFixtures } from "./fixtures";
+import { createEmptyState } from "./model";
 
 /**
  * Live adapter: task data comes from the Altius API; non-task preferences
@@ -107,19 +107,20 @@ export const createApiAdapter = (
 
   return {
     async load(): Promise<DemoState> {
-      const localState = await local.load();
       const { data } = await request("/api/v3/tasks");
       const tasks = (Array.isArray(data) ? data : []).map((d) =>
         toTask(d as TaskDoc),
       );
-      return { ...localState, tasks };
+      const base = createEmptyState();
+      const localState = await local.load().catch(() => base);
+      return { ...base, ...localState, tasks };
     },
     save(state) {
-      local.save(state);
+      const prefs = { ...createEmptyState(), ...state, tasks: [] };
+      local.save(prefs);
     },
     reset() {
-      const base = local.reset();
-      return { ...createFixtures(), ...base };
+      return createEmptyState();
     },
   };
 };

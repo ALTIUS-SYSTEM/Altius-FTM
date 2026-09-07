@@ -1,6 +1,6 @@
 import { stateSchema, demoTaskSchema } from "./model";
 import type { DemoState, DemoTask } from "./model";
-import { createFixtures } from "./fixtures";
+import { createEmptyState } from "./model";
 
 export const STORAGE_KEY = "altius.web.demo.v1";
 export interface DemoAdapter {
@@ -11,7 +11,7 @@ export interface DemoAdapter {
 export const createLocalAdapter = (storage: Pick<Storage, "getItem" | "setItem" | "removeItem">): DemoAdapter => ({
   async load() {
     const raw = storage.getItem(STORAGE_KEY);
-    if (!raw) return createFixtures();
+    if (!raw) return createEmptyState();
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -19,11 +19,11 @@ export const createLocalAdapter = (storage: Pick<Storage, "getItem" | "setItem" 
       throw new Error("Stored demo data is not valid JSON.");
     }
     const result = stateSchema.safeParse(parsed);
-    if (!result.success) throw new Error("Saved demo data is incompatible. Reset the demo to load a clean synthetic dataset.");
+    if (!result.success) throw new Error("Saved demo data is incompatible. Reset the workspace to continue.");
     return result.data;
   },
   save(state) { storage.setItem(STORAGE_KEY, JSON.stringify(stateSchema.parse(state))); },
-  reset() { storage.removeItem(STORAGE_KEY); return createFixtures(); }
+  reset() { storage.removeItem(STORAGE_KEY); return createEmptyState(); }
 });
 
 export const filterTasks = (tasks: readonly DemoTask[], filters: { hub: string; search?: string; status?: string; assignee?: string; flow?: string; date?: string }) => tasks.filter(task =>
