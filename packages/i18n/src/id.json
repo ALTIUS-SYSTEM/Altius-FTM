@@ -1,0 +1,6 @@
+{
+  "app.name": "Altius Field", "nav.dashboard": "Dasbor", "nav.tasks": "Tugas", "nav.route": "Rute", "nav.lhs": "Laporan harian sopir", "nav.anomaly": "Tinjauan GPS", "nav.settings": "Pengaturan", "nav.history": "Riwayat", "nav.signOut": "Keluar",
+  "driver.arrive": "Lapor tiba", "driver.start": "Mulai aktivitas", "driver.complete": "Lapor selesai", "driver.depart": "Lapor berangkat", "driver.nextStop": "Titik berikutnya", "driver.navigate": "Navigasi", "driver.checkIn": "Absen masuk", "driver.checkOut": "Absen keluar", "driver.addExpense": "Tambah biaya",
+  "status.pending": "Menunggu", "status.arrived": "Tiba", "status.inProgress": "Berlangsung", "status.completed": "Selesai", "status.departed": "Berangkat", "status.offline": "Luring", "status.queued": "Menunggu sinkronisasi", "status.synced": "Tersinkron",
+  "route.planned": "Rute rencana", "route.actual": "Jejak tercatat", "route.eta": "Perkiraan tiba", "route.ata": "Waktu lapor tiba", "route.demo": "Graf demo — bukan rute jalan", "gps.insufficient": "Data GPS tidak cukup", "gps.review": "Perlu ditinjau, bukan bukti kecurangan", "lhs.submit": "Kirim laporan", "lhs.approve": "Setujui", "lhs.requestRevision": "Minta revisi", "common.save": "Simpan", "common.cancel": "Batal", "common.retry": "Coba lagi"
+}

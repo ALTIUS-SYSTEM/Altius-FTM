@@ -1,0 +1,8 @@
+packages:
+  - apps/web
+  - apps/landing
+  - packages/*
+minimumReleaseAge: 10080
+overrides:
+  next@15.5.24>postcss: 8.5.23
+  vite@7.3.6>esbuild: 0.28.2

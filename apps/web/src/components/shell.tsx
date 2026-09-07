@@ -1,0 +1,36 @@
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+import type { ReactNode } from "react";
+import { useDemo } from "./demo-provider";
+import { Brand, Icon, Modal, Badge, Field } from "./ui";
+import { MODULES, PAGE_DESCRIPTIONS } from "@/lib/routes";
+import { LOCALES } from "@/lib/i18n";
+import type { Locale } from "@/lib/i18n";
+import type { DemoState } from "@/data/model";
+
+export function Shell({ path, children }: { path: string; children: ReactNode }) {
+  const { state, update, t, error, reset } = useDemo();
+  const [collapsed, setCollapsed] = useState(false);
+  const [panel, setPanel] = useState("");
+  const moduleKey = path === "no-access" ? "setting" : path.split("/")[0];
+  const module = MODULES.find(item => item.key === moduleKey) ?? MODULES[0];
+  const hubRecords = state.records.filter(record => record.kind === "hub" && !record.archived);
+  const title = path === "dashboard/task" ? "Operations overview" : t(path.split("/").at(-1) ?? moduleKey);
+  return <div className={`workspace ${collapsed ? "collapsed" : ""}`}>
+    <a className="skip-link" href="#main">Skip to main content</a>
+    <aside className="sidebar"><Link href="/dashboard/task" className="brand-link"><Brand compact={collapsed}/></Link><div className="workspace-label">{collapsed ? "FTM" : "OPERATIONS WORKSPACE"}</div><nav aria-label="Main navigation">{MODULES.map((item, index) => <Link key={item.key} href={`/${item.home}`} title={t(item.key)} aria-current={moduleKey === item.key ? "page" : undefined} className={`nav-item ${moduleKey === item.key ? "active" : ""} ${index === 5 ? "nav-divider" : ""}`}><Icon name={item.key}/>{!collapsed && <><span>{t(item.key)}</span>{item.key === "anomaly" && <span className="nav-count">3</span>}</>}</Link>)}</nav><div className="sidebar-bottom">{!collapsed && <div className="workspace-health"><span className="health-dot"/><div>Local demo environment<small>No live integrations</small></div></div>}<button className="nav-item collapse-button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}><Icon name="menu"/>{!collapsed && "Collapse sidebar"}</button></div></aside>
+    <div className="main-shell"><header className="topbar"><div className="breadcrumb">Workspace <span>/</span> <strong>{t(moduleKey)}</strong></div><div className="topbar-actions"><label className="hub-select"><Icon name="pin" size={17}/><span className="sr-only">Current hub</span><select aria-label="Current hub" value={state.hub} onChange={event => update(current => ({ ...current, hub: event.target.value, routeGenerated: false }), `Switched to ${event.target.value} demo hub`)}>{hubRecords.map(hub => <option key={hub.id}>{hub.name}</option>)}</select></label><select className="language-select" aria-label="Language" value={state.locale} onChange={event => update(current => ({ ...current, locale: event.target.value as Locale }))}>{Object.entries(LOCALES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><button className="icon-button notification-button" aria-label="Open notifications" onClick={() => setPanel("notifications")}><Icon name="bell"/><span/></button><button className="profile-button" onClick={() => setPanel("profile")} aria-label="Open demo profile"><span className="avatar">AM</span><span>Alex Morgan<small>{state.role} · Demo</small></span></button></div></header>
+    <div className="demo-banner"><Badge tone="demo">{t("demo")}</Badge><span>Synthetic data · Saved in this browser only · No backend authorization</span><button onClick={() => setPanel("help")}>How this demo works <Icon name="arrow" size={15}/></button></div>
+    {error && <div className="error-banner" role="alert">{error}<button onClick={reset}>Reset demo</button></div>}
+    {state.locale !== "en" && <div className="locale-note">Navigation and core controls: {LOCALES[state.locale]}. Untranslated operational details explicitly fall back to English.</div>}
+    <main id="main" tabIndex={-1}><div className="page-heading"><div><div className="eyebrow">{state.hub.toUpperCase()} HUB <span className="eyebrow-dot">/</span> FIELD TASK MANAGEMENT</div><h1>{title}</h1><p>{PAGE_DESCRIPTIONS[moduleKey]}</p></div><span className="date-chip">07 Sep 2026 <span>Monday</span></span></div>
+    {module.tabs.length > 1 && <nav className="tabs" aria-label={`${t(moduleKey)} views`}>{module.tabs.map(tab => { const target = tab === "no-access" ? tab : `${module.key}/${tab}`; return <Link key={tab} href={`/${target}`} aria-current={path === target ? "page" : undefined} className={path === target ? "active" : ""}>{t(tab)}</Link>; })}</nav>}
+    <div className="page-content">{children}</div><footer className="page-footer"><span>© 2026 Altius · Built for the way your team moves.</span><span>Demo v0.1 · Asia/Jakarta</span></footer></main></div>
+    {panel && <Modal title={panel === "profile" ? "Demo profile" : panel === "notifications" ? "Operations inbox" : "Your local demo workspace"} onClose={() => setPanel("")}>
+      {panel === "profile" ? <><div className="profile-summary"><span className="avatar large">AM</span><div><h3>Alex Morgan</h3><p>alex@example.test</p></div></div><p>Role selection changes the displayed persona only. It does not enforce authorization.</p><Field label="Demo persona"><select value={state.role} onChange={event => update(current => ({ ...current, role: event.target.value as DemoState["role"] }))}>{["Admin", "Supervisor", "Lead"].map(role => <option key={role}>{role}</option>)}</select></Field><div className="modal-actions"><button onClick={() => update(current => ({ ...current, session: false }))}>Leave demo session</button><button className="primary" onClick={() => setPanel("")}>Done</button></div></> : panel === "notifications" ? <div className="stack"><Link className="inbox-item" href="/anomaly" onClick={() => setPanel("")}><Badge tone="failed">Review</Badge><div><strong>GPS variance requires review</strong><p>3 synthetic app/vehicle comparisons exceed the demo threshold.</p></div></Link><Link className="inbox-item" href="/lhs" onClick={() => setPanel("")}><Badge tone="assigned">LHS</Badge><div><strong>Daily driver reports are ready</strong><p>Review visit activity and sample operational expenses.</p></div></Link></div> : <div className="stack"><p>Create and assign tasks, compare schematic routes, review driver reports, and configure workflows. Changes stay in localStorage on this browser.</p><div className="info-box">All names, email addresses, locations, invoices, and GPS records are synthetic. No emails, payments, backend requests, or real deletions occur. Do not enter personal or confidential information.</div><p>Maps default to a schematic, not a street map. Optional Google Maps uses only the official Embed API with a configured key.</p><button className="danger" onClick={() => setPanel("reset")}>Reset local demo data</button></div>}
+      {panel === "reset" && <div className="confirm-box"><p>This replaces edits in this browser with the original synthetic fixtures. It does not affect any external system.</p><button className="danger" onClick={() => { reset(); setPanel(""); }}>Confirm local reset</button></div>}
+    </Modal>}
+  </div>;
+}

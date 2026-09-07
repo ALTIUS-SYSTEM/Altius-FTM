@@ -1,0 +1,177 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useDemo } from "@/components/demo-provider";
+import { Badge, Card, Empty, Field, Icon, Modal, Metric, Table } from "@/components/ui";
+import { downloadText, tasksCsv } from "@/data/adapter";
+import { DEMO_DATE, DRIVERS } from "@/data/model";
+import type { DemoRecord } from "@/data/model";
+import { dijkstra, etaMinutes, compareGpsStreams, evaluateCorridor, aggregateDaily } from "@altius/algos";
+
+/* ---------- shared helpers ---------- */
+function SearchField({ value, onChange, placeholder = "Search" }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+  return <div className="search-field"><Icon name="search" size={16}/><input aria-label={placeholder} placeholder={placeholder} value={value} onChange={e => onChange(e.target.value)}/></div>;
+}
+function useFiltered(kind: string) {
+  const { state } = useDemo();
+  const [search, setSearch] = useState("");
+  const rows = state.records.filter(r => r.kind === kind && !r.archived && (r.hub === state.hub || kind === "datatype") && (!search || `${r.name} ${r.detail}`.toLowerCase().includes(search.toLowerCase())));
+  return { rows, search, setSearch };
+}
+function RecordTable({ kind, headings, render, empty, onCreate }: { kind: string; headings: string[]; render: (r: DemoRecord) => React.ReactNode; empty: string; onCreate?: () => void }) {
+  const { rows, search, setSearch } = useFiltered(kind);
+  return <><div className="toolbar"><SearchField value={search} onChange={setSearch}/><div className="grow"/>{onCreate && <button className="primary" onClick={onCreate}><Icon name="plus"/>Create</button>}</div>
+    <Card>{rows.length ? <Table count={rows.length} headings={headings}>{rows.map(render)}</Table> : <Empty title={empty}/>}</Card></>;
+}
+function RecordEditor({ kind, record, onClose }: { kind: string; record?: DemoRecord; onClose: () => void }) {
+  const { state, update } = useDemo();
+  const [draft, setDraft] = useState(record ?? { id: `${kind}-${crypto.randomUUID().slice(0, 8)}`, kind, name: "", detail: "", extra: "", hub: state.hub, status: "Active", archived: false });
+  const [err, setErr] = useState("");
+  return <Modal title={record ? `Edit ${record.name}` : `Create ${kind}`} onClose={onClose}><form onSubmit={e => { e.preventDefault(); if (draft.name.trim().length < 2) { setErr("Name requires at least 2 characters."); return; } update(c => ({ ...c, records: record ? c.records.map(r => r.id === record.id ? draft : r) : [...c.records, draft] }), "Saved locally."); onClose(); }}><div className="stack"><Field label="Name"><input required minLength={2} maxLength={120} value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}/></Field><Field label="Detail"><input maxLength={500} value={draft.detail} onChange={e => setDraft(d => ({ ...d, detail: e.target.value }))}/></Field><Field label="Extra"><input maxLength={500} value={draft.extra} onChange={e => setDraft(d => ({ ...d, extra: e.target.value }))}/></Field>{err && <p role="alert" className="error-banner">{err}</p>}<div className="modal-actions"><button type="button" onClick={onClose}>Cancel</button><button className="primary" type="submit">Save locally</button></div></div></form></Modal>;
+}
+const act = (r: DemoRecord, actions?: React.ReactNode) => <tr key={r.id}><td><button className="text-button">{r.name}</button><small className="cell-sub">{r.detail}</small></td><td>{r.extra}</td><td><Badge tone={r.status === "Active" || r.status === "Published demo" ? "completed" : "assigned"}>{r.status}</Badge></td><td>{actions ?? "—"}</td></tr>;
+
+/* ---------- dashboard ---------- */
+const LINE = [18, 22, 17, 26, 30, 24, 34];
+export function Dashboard() {
+  const { state, t } = useDemo();
+  const tasks = state.tasks.filter(x => x.hub === state.hub);
+  const done = tasks.filter(x => x.status === "completed").length;
+  const running = tasks.filter(x => x.status === "in-progress").length;
+  const failed = tasks.filter(x => x.status === "failed").length;
+  const max = Math.max(...LINE);
+  return <>
+    <div className="metric-grid"><Metric label="Tasks today" value={tasks.length} detail={`${done} completed`} tone="primary"/><Metric label="In progress" value={running} detail="Across all drivers" tone="amber"/><Metric label="Failed" value={failed} detail="Needs review" tone="danger"/><Metric label="Drivers" value={DRIVERS.length} detail="Demo roster" /></div>
+    <div className="grid-2">
+      <Card title={t("tasks") + " · weekly activity"}><svg className="chart" viewBox="0 0 300 120" role="img" aria-label="Task activity line chart"><polyline fill="none" stroke="var(--cyan)" strokeWidth="2.5" points={LINE.map((v, i) => `${20 + i * 43},${105 - v / max * 80}`).join(" ")}/>{LINE.map((v, i) => <circle key={i} cx={20 + i * 43} cy={105 - v / max * 80} r="3" fill="var(--teal)"/>)}</svg></Card>
+      <Card title="Status breakdown"><div className="donut-wrap"><svg viewBox="0 0 42 42" className="donut" role="img" aria-label="Task status distribution"><circle cx="21" cy="21" r="15.9" fill="none" stroke="var(--surface-high)" strokeWidth="6"/>{[["completed", done, "var(--teal)", 0], ["in-progress", running, "var(--amber)", done], ["failed", failed, "var(--danger)", done + running]].map(([k, v, c, off]) => <circle key={k as string} cx="21" cy="21" r="15.9" fill="none" stroke={c as string} strokeWidth="6" strokeDasharray={`${(v as number) / tasks.length * 100} ${100 - (v as number) / tasks.length * 100}`} strokeDashoffset={25 - (off as number) / tasks.length * 100}/>)}</svg><ul className="legend">{[["Completed", done, "var(--teal)"], ["In progress", running, "var(--amber)"], ["Failed", failed, "var(--danger)"], ["Unassigned/assigned", tasks.length - done - running - failed, "var(--outline)"]].map(([l, v, c]) => <li key={l as string}><i style={{ background: c as string }}/>{l} <strong>{v}</strong></li>)}</ul></div></Card>
+    </div>
+    <Card title="Driver activity"><Table headings={["Driver", "Assigned", "Completed", "In progress", "Failed"]}>{DRIVERS.map(d => { const mine = tasks.filter(x => x.assignee === d); return <tr key={d}><td>{d}</td><td>{mine.length}</td><td>{mine.filter(x => x.status === "completed").length}</td><td>{mine.filter(x => x.status === "in-progress").length}</td><td>{mine.filter(x => x.status === "failed").length}</td></tr>; })}</Table></Card>
+  </>;
+}
+
+/* ---------- tasks: tracking / schedule / gallery ---------- */
+export { Schedule } from "./schedule-planner";
+
+export function Tracking() {
+  const { state } = useDemo();
+  const mine = state.tasks.filter(x => x.hub === state.hub);
+  return <><div className="metric-grid"><Metric label="Drivers" value={DRIVERS.length} detail="Demo roster"/><Metric label="Completed" value={mine.filter(x => x.status === "completed").length} detail="Today"/><Metric label="Running" value={mine.filter(x => x.status === "in-progress").length} detail="Active now" tone="amber"/><Metric label="Travel time" value="2h 14m" detail="Simulated"/><Metric label="Distance" value="38.4 km" detail="Simulated"/></div>
+    <div className="split"><Card title="Active drivers">{DRIVERS.map((d, i) => <div className="driver-row" key={d}><span className="avatar">{d.split(" ").map(w => w[0]).join("")}</span><div><strong>{d}</strong><small className="cell-sub">{mine.filter(x => x.assignee === d && x.status === "in-progress").length} active · {mine.filter(x => x.assignee === d).length} total</small></div><Badge tone={i % 3 === 2 ? "unassigned" : "completed"}>{i % 3 === 2 ? "Idle" : "On route"}</Badge></div>)}</Card>
+    <div className="map-panel"><span className="map-tag">Offline schematic · not a navigation map</span><svg viewBox="0 0 400 220" className="schematic"><rect width="400" height="220" fill="var(--surface-low)"/><path d="M40 180 L120 140 L200 150 L280 90 L350 60" stroke="var(--teal)" strokeWidth="3" fill="none"/><path d="M40 180 L120 140 L200 150 L300 130 L350 60" stroke="var(--amber)" strokeWidth="2" strokeDasharray="6 5" fill="none"/>{[[40, 180], [120, 140], [200, 150], [280, 90], [350, 60]].map(([x, y], i) => <g key={i}><circle cx={x} cy={y} r="8" fill="var(--cyan)"/><text x={x} y={y + 4} textAnchor="middle" fontSize="9" fill="var(--cyan-dark)" fontWeight="700">{i + 1}</text></g>)}</svg></div></div></>;
+}
+export function Gallery() {
+  const { state } = useDemo();
+  const done = state.tasks.filter(x => x.hub === state.hub && x.status === "completed");
+  return <Card title="Task media gallery"><div className="info-box">Photo and video evidence collection is not part of this demo. Completed tasks appear as placeholders.</div><div className="gallery-grid">{done.map(x => <div key={x.id} className="gallery-item"><Icon name="tasks" size={28}/><span>{x.title}</span><small>No media attached</small></div>)}</div></Card>;
+}
+
+/* ---------- route ---------- */
+const DEMO_GRAPH = { Hub: [{ to: "S1", weight: 8 }, { to: "S2", weight: 14 }], S1: [{ to: "S2", weight: 4 }, { to: "S3", weight: 9 }], S2: [{ to: "S3", weight: 3 }, { to: "S4", weight: 11 }], S3: [{ to: "S4", weight: 5 }], S4: [] };
+export function RouteVisit() {
+  const { state, update, notify } = useDemo();
+  const [search, setSearch] = useState("");
+  const visits = state.tasks.filter(x => x.hub === state.hub && (!search || x.title.toLowerCase().includes(search.toLowerCase())));
+  const toggle = (id: string) => update(c => ({ ...c, selectedVisits: c.selectedVisits.includes(id) ? c.selectedVisits.filter(v => v !== id) : [...c.selectedVisits, id], routeGenerated: false }));
+  return <div className="split"><Card title={`Visits (${state.selectedVisits.length}/${visits.length})`} action={<SearchField value={search} onChange={setSearch}/>}><div className="visit-list">{visits.map((v, i) => <label key={v.id} className="visit-row"><input type="checkbox" checked={state.selectedVisits.includes(v.id)} onChange={() => toggle(v.id)}/><span className="visit-num">{i + 1}</span><span className="visit-name">{v.title}<small className="cell-sub">{v.address}</small></span><Icon name="pin" size={15}/></label>)}</div><button className="primary wide-btn" onClick={() => { update(c => ({ ...c, routeGenerated: true })); notify("Demo route computed on a fixed graph — not road routing."); }}>Optimalkan · demo graph</button></Card>
+    <div className="map-panel"><span className="map-tag">Schematic stops — simulated positions</span><svg viewBox="0 0 400 260" className="schematic"><rect width="400" height="260" fill="var(--surface-low)"/>{visits.slice(0, 9).map((v, i) => { const x = 40 + (i % 3) * 130, y = 50 + Math.floor(i / 3) * 70; return <g key={v.id}><circle cx={x} cy={y} r="10" fill={state.selectedVisits.includes(v.id) ? "var(--cyan)" : "var(--outline)"}/><text x={x} y={y + 4} textAnchor="middle" fontSize="10" fill="var(--card)" fontWeight="700">{i + 1}</text></g>; })}</svg></div></div>;
+}
+export function RouteConfig() {
+  const { state, update } = useDemo();
+  const cfg = state.routeConfig;
+  const set = (patch: Partial<typeof cfg>) => update(c => ({ ...c, routeConfig: { ...c.routeConfig, ...patch } }));
+  return <div className="grid-3"><Card title="Vehicle speed"><Field label="Average speed (km/h)"><input type="number" min={5} max={100} value={cfg.speed} onChange={e => set({ speed: Number(e.target.value) })}/></Field><Field label="Default visit time (min)"><input type="number" min={0} max={120} value={cfg.service} onChange={e => set({ service: Number(e.target.value) })}/></Field></Card>
+  <Card title="Constraints"><Field label="Capacity limit (kg)"><input type="number" min={1} max={5000} value={cfg.capacity} onChange={e => set({ capacity: Number(e.target.value) })}/></Field><label className="check-row"><input type="checkbox" checked={cfg.returnHub} onChange={e => set({ returnHub: e.target.checked })}/>Return to hub</label><label className="check-row"><input type="checkbox" checked={cfg.avoidTolls} onChange={e => set({ avoidTolls: e.target.checked })}/>Avoid tolls</label></Card>
+  <Card title="Vehicles">{cfg.vehicles.map(v => <div key={v} className="visit-row"><span className="visit-name">{v}</span></div>)}<div className="info-box">Demo configuration only. No route engine is contacted.</div></Card></div>;
+}
+const METERS_PER_COST_UNIT = 1000;
+
+export function RouteResult() {
+  const { state } = useDemo();
+  if (!state.routeGenerated) return <Empty title="No route computed yet" description="Select visits and run the demo optimizer." action={<Link className="primary link-btn" href="/route/visit">Go to visits</Link>}/>;
+  const r = dijkstra(DEMO_GRAPH, "Hub", "S4");
+  const eta = r ? etaMinutes(r.cost * METERS_PER_COST_UNIT, state.routeConfig.speed) : null;
+  return <div className="grid-2"><Card title="Computed demo route"><ol className="route-steps">{r?.path.map(n => <li key={n}><Badge tone="assigned">{n}</Badge></li>)}</ol><div className="info-box">Dijkstra over a fixed 5-node graph. Cost {r?.cost} units ≈ {r?.cost} km schematic. Demo ETA {eta?.toFixed(0)} min at {state.routeConfig.speed} km/h. Not road routing or live traffic.</div></Card>
+  <div className="map-panel"><span className="map-tag">Schematic result</span><svg viewBox="0 0 400 200" className="schematic"><rect width="400" height="200" fill="var(--surface-low)"/><path d="M30 160 L120 110 L210 120 L300 70 L370 45" stroke="var(--teal)" strokeWidth="3" fill="none"/>{[[30, 160], [120, 110], [210, 120], [300, 70], [370, 45]].map(([x, y], i) => <circle key={i} cx={x} cy={y} r="7" fill="var(--cyan)"/>)}</svg></div></div>;
+}
+
+/* ---------- flow ---------- */
+export function FlowBuilder() {
+  const { state, update, notify } = useDemo();
+  const add = (type: string) => update(c => ({ ...c, workflow: [...c.workflow, { id: `step-${crypto.randomUUID().slice(0, 6)}`, label: `New ${type} step`, type, required: false }] }), "Step added locally.");
+  const move = (i: number, dir: -1 | 1) => update(c => { const w = [...c.workflow]; const j = i + dir; if (j < 0 || j >= w.length) return c; [w[i], w[j]] = [w[j], w[i]]; return { ...c, workflow: w }; });
+  return <div className="split"><Card title="Workflow canvas" action={<div className="button-row">{["Text", "Number", "Photo", "Location"].map(tp => <button key={tp} onClick={() => add(tp)}><Icon name="plus"/>{tp}</button>)}</div>}><ol className="flow-steps">{state.workflow.map((s, i) => <li key={s.id} className="flow-step"><span className="visit-num">{i + 1}</span><div className="flow-step-body"><strong>{s.label}</strong><small className="cell-sub">{s.type}{s.required ? " · required" : ""}</small></div><div className="button-row"><button aria-label={`Move ${s.label} up`} disabled={i === 0} onClick={() => move(i, -1)}>↑</button><button aria-label={`Move ${s.label} down`} disabled={i === state.workflow.length - 1} onClick={() => move(i, 1)}>↓</button><button className="danger" onClick={() => update(c => ({ ...c, workflow: c.workflow.filter(x => x.id !== s.id) }))}>Remove</button></div></li>)}</ol><button className="primary wide-btn" onClick={() => notify("Workflow saved locally — synthetic only.")}>Save workflow</button></Card>
+    <Card title="Mobile preview"><div className="phone-preview"><div className="phone-bar"/>{state.workflow.slice(0, 4).map(s => <div key={s.id} className="preview-field"><span>{s.label}{s.required ? " *" : ""}</span></div>)}</div></Card></div>;
+}
+export function Automation() { const [editing, setEditing] = useState(false); return <><RecordTable kind="automation" headings={["Automation", "Rule", "Status", "Actions"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No automations" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="automation" onClose={() => setEditing(false)}/>}</>; }
+export function WorkflowList() { const [editing, setEditing] = useState(false); return <><RecordTable kind="workflow" headings={["Workflow", "Steps", "Status", "Actions"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No workflows" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="workflow" onClose={() => setEditing(false)}/>}</>; }
+
+/* ---------- data & import-export ---------- */
+export function DataList() { const [editing, setEditing] = useState(false); return <><RecordTable kind="customer" headings={["Customer", "Address", "Code / location", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No customers" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="customer" onClose={() => setEditing(false)}/>}</>; }
+export function DataType() { return <RecordTable kind="datatype" headings={["Type", "Fields", "Scope", "Status"]} render={r => act(r)} empty="No data types"/>; }
+export function DataImport() {
+  const { notify } = useDemo();
+  return <Card title="Import demo data"><div className="info-box">Imported rows stay in this browser. Nothing is uploaded.</div><label className="upload-box"><input type="file" accept=".csv" onChange={e => { const f = e.target.files?.[0]; if (f) notify(`"${f.name}" selected — demo import does not parse or persist files.`); }}/><Icon name="download" size={28}/><span>Choose a CSV file to preview import</span></label></Card>;
+}
+export function DataExport() {
+  const { state } = useDemo();
+  return <Card title="Export demo data"><p>Download the current synthetic task set as CSV.</p><button className="primary" onClick={() => downloadText("altius-demo-tasks.csv", tasksCsv(state.tasks))}><Icon name="download"/>Export tasks CSV</button></Card>;
+}
+
+/* ---------- settings ---------- */
+export function Users() { const [editing, setEditing] = useState(false); return <><RecordTable kind="user" headings={["User", "Contact", "Role", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No users" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="user" onClose={() => setEditing(false)}/>}</>; }
+export function Teams() { const [editing, setEditing] = useState(false); return <><RecordTable kind="team" headings={["Team", "Shift", "Members", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No teams" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="team" onClose={() => setEditing(false)}/>}</>; }
+export function Permissions() {
+  const { state, update } = useDemo();
+  const groups: Record<string, string[]> = { Tasks: ["view", "create", "edit", "complete", "assign"], Settings: ["users", "roles", "hubs", "organization"], Reports: ["lhs.review", "anomaly.review"] };
+  return <div className="grid-3">{Object.entries(groups).map(([g, perms]) => <Card key={g} title={g}>{perms.map(p => { const key = `${g}.${p}`; return <label key={key} className="check-row"><input type="checkbox" checked={state.permissions[key] ?? true} onChange={e => update(c => ({ ...c, permissions: { ...c.permissions, [key]: e.target.checked } }))}/>{p}</label>; })}</Card>)}<div className="info-box">Permission toggles persist locally for the demo only; they do not enforce access control.</div></div>;
+}
+export function Hubs() { const [editing, setEditing] = useState(false); return <><RecordTable kind="hub" headings={["Hub", "Address", "Region", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No hubs" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="hub" onClose={() => setEditing(false)}/>}</>; }
+export function Organization() {
+  const { state, update } = useDemo();
+  return <Card title="Organization details"><div className="form-grid"><Field label="Name"><input value={state.organization.name} onChange={e => update(c => ({ ...c, organization: { ...c.organization, name: e.target.value } }))}/></Field><Field label="Currency"><select value={state.organization.currency} onChange={e => update(c => ({ ...c, organization: { ...c.organization, currency: e.target.value } }))}><option>IDR</option><option>USD</option></select></Field><Field label="Password expiry (days)"><input type="number" value={state.organization.passwordDays} onChange={e => update(c => ({ ...c, organization: { ...c.organization, passwordDays: e.target.value } }))}/></Field></div></Card>;
+}
+export function CustomModule() { const [editing, setEditing] = useState(false); return <><RecordTable kind="module" headings={["Module", "Description", "Type", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No modules" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="module" onClose={() => setEditing(false)}/>}</>; }
+export function Trash() {
+  const { state, update } = useDemo();
+  const rows = state.records.filter(r => r.archived);
+  return <Card title="Trash"><div className="info-box">Demo trash. Restoring affects only this browser.</div>{rows.length ? <Table headings={["Name", "Type", "Actions"]} count={rows.length}>{rows.map(r => <tr key={r.id}><td>{r.name}</td><td>{r.kind}</td><td><button onClick={() => update(c => ({ ...c, records: c.records.map(x => x.id === r.id ? { ...x, archived: false } : x) }), "Restored locally.")}>Restore</button></td></tr>)}</Table> : <Empty title="Trash is empty"/>}</Card>;
+}
+export function NoAccess() { return <Empty title="Add-ons are not part of this demo" description="Custom add-ons require a backend integration that this demo does not include."/>; }
+
+/* ---------- billing ---------- */
+const PLANS = [["Starter", "1,000 tasks/mo", "2 data sources"], ["Pro", "2,500 tasks/mo", "5 data sources · automation"], ["Enterprise", "Custom volume", "SLA · SSO · audit"]] as const;
+export function Plan() { return <div className="grid-3">{PLANS.map(([name, quota, feat]) => <Card key={name} title={name}><div className="plan-price">{name === "Enterprise" ? "Custom" : "IDR 0"}<small>demo</small></div><ul className="plan-list"><li>{quota}</li><li>{feat}</li><li>Synthetic preview</li></ul><button disabled title="Billing is disabled in the demo">Not available in demo</button></Card>)}</div>; }
+export function Subscription() { return <Card title="Current license"><h3 className="plan-name">Demo plan</h3><p>0 / 1,000 tasks used this cycle (synthetic).</p><div className="info-box">No real subscription or billing exists in this demo.</div></Card>; }
+export function History() { return <RecordTable kind="invoice" headings={["Invoice", "Period", "Total", "Status"]} render={r => act(r)} empty="No invoices"/>; }
+
+/* ---------- LHS (PRD b) ---------- */
+export function Lhs() {
+  const { state, update } = useDemo();
+  const dayEvents = [
+    { kind: "arrived", entity: "ALT-1041", day: DEMO_DATE }, { kind: "done", entity: "ALT-1041", day: DEMO_DATE },
+    { kind: "arrived", entity: "ALT-1042", day: DEMO_DATE }, { kind: "done", entity: "ALT-1042", day: DEMO_DATE },
+    { kind: "arrived", entity: "ALT-1043", day: DEMO_DATE }];
+  const dayCosts = [{ amount: 120000, day: DEMO_DATE }, { amount: 35000, day: DEMO_DATE }, { amount: 50000, day: DEMO_DATE }];
+  const agg = aggregateDaily(dayEvents, dayCosts, DEMO_DATE);
+  const reports = DRIVERS.slice(0, 3).map((d, i) => ({ id: `lhs-${i}`, driver: d, day: DEMO_DATE, ...agg, routeKm: 12.4 + i * 3, status: state.reviews[`lhs-${i}`]?.status ?? "Submitted" }));
+  const review = (id: string, status: string) => update(c => ({ ...c, reviews: { ...c.reviews, [id]: { status, note: "" } } }), `Report ${status.toLowerCase()} locally.`);
+  return <><div className="metric-grid"><Metric label="Reports today" value={reports.length} detail="Synthetic submissions"/><Metric label="Stops visited" value={agg.visitedStops} detail="From device events"/><Metric label="Completed" value={agg.completedStops} detail="Reported done"/><Metric label="Total costs" value={`IDR ${(agg.totalCost / 1000).toFixed(0)}k`} detail="Sample expenses" tone="amber"/></div>
+  <Card title="Laporan Harian Sopir"><Table count={reports.length} headings={["Driver", "Date", "Visited", "Completed", "Route km", "Costs (IDR)", "Status", "Actions"]}>{reports.map(r => <tr key={r.id}><td>{r.driver}</td><td>{r.day}</td><td>{r.visitedStops}</td><td>{r.completedStops}</td><td>{r.routeKm.toFixed(1)}</td><td>{r.totalCost.toLocaleString("id-ID")}</td><td><Badge tone={r.status === "Approved" ? "completed" : r.status === "Revision" ? "failed" : "assigned"}>{r.status}</Badge></td><td className="button-row"><button onClick={() => review(r.id, "Approved")}>Approve</button><button onClick={() => review(r.id, "Revision")}>Request revision</button></td></tr>)}</Table></Card>
+  <div className="info-box">Sample report detail: JKT-001 → arrived 08:12, departed 08:26. Costs: fuel IDR 120k, toll IDR 35k, parking IDR 50k. Timestamps are synthetic fixtures, not device captures.</div></>;
+}
+
+/* ---------- anomaly + geofence (PRD c,e,f) ---------- */
+const APP_STREAM = [{ lat: -6.175, lng: 106.827, at: 1000, accuracyMeters: 8 }, { lat: -6.176, lng: 106.829, at: 31000, accuracyMeters: 10 }, { lat: -6.177, lng: 106.831, at: 61000, accuracyMeters: 9 }];
+const VEHICLE_STREAM = [{ lat: -6.1751, lng: 106.8271, at: 2000 }, { lat: -6.179, lng: 106.833, at: 32000 }, { lat: -6.1772, lng: 106.8312, at: 62000 }];
+const CORRIDOR = [{ lat: -6.174, lng: 106.826 }, { lat: -6.176, lng: 106.829 }, { lat: -6.178, lng: 106.832 }];
+export function Anomaly() {
+  const { state, update } = useDemo();
+  const result = compareGpsStreams({ app: APP_STREAM, vehicle: VEHICLE_STREAM }, { maxTimeGapMs: 10000, thresholdMeters: 150 });
+  const geo = evaluateCorridor(APP_STREAM, CORRIDOR, { radiusMeters: 100, consecutiveBreach: 2, maxAccuracyMeters: 50 });
+  const rows = DRIVERS.slice(0, 3).map((d, i) => ({ id: `an-${i}`, driver: d, variance: i === 1 ? result.varianceMeters : 12 + i * 18, matched: i === 1 ? result.matched : 3, flag: i === 1 ? result.flag : "none", status: state.reviews[`an-${i}`]?.status ?? "Open" }));
+  return <><div className="metric-grid"><Metric label="Comparisons" value={rows.length} detail="Synthetic samples"/><Metric label="Flagged" value={rows.filter(r => r.flag === "review").length} detail="Above 150 m threshold" tone="danger"/><Metric label="Max variance" value={`${result.varianceMeters} m`} detail="App vs vehicle GPS"/><Metric label="Geofence" value={geo.offRoute ? "Off-route" : "On route"} detail={`Corridor check: ${geo.reason}`} tone={geo.offRoute ? "danger" : "primary"}/></div>
+  <Card title="App vs vehicle GPS comparison"><Table count={rows.length} headings={["Driver", "Variance", "Matched samples", "Signal", "Review", "Actions"]}>{rows.map(r => <tr key={r.id}><td>{r.driver}</td><td>{r.variance} m</td><td>{r.matched}</td><td><Badge tone={r.flag === "review" ? "failed" : "completed"}>{r.flag}</Badge></td><td><Badge tone={r.status === "Resolved" ? "completed" : "assigned"}>{r.status}</Badge></td><td><button onClick={() => update(c => ({ ...c, reviews: { ...c.reviews, [r.id]: { status: "Resolved", note: "" } } }), "Marked resolved locally.")}>Resolve</button></td></tr>)}</Table></Card>
+  <div className="info-box"><strong>Simulation only.</strong> Missing or unmatched samples are reported as insufficient data, never as fraud. Flags mean "review", not proof. Geofence uses corridor distance with a 2-sample hysteresis and 50 m accuracy gate.</div></>;
+}

@@ -1,0 +1,6 @@
+{
+  "app.name": "Altius Field", "nav.dashboard": "仪表盘", "nav.tasks": "任务", "nav.route": "路线", "nav.lhs": "司机日报", "nav.anomaly": "GPS复核", "nav.settings": "设置", "nav.history": "历史", "nav.signOut": "退出登录",
+  "driver.arrive": "报告到达", "driver.start": "开始作业", "driver.complete": "报告完成", "driver.depart": "报告离开", "driver.nextStop": "下一站", "driver.navigate": "导航", "driver.checkIn": "签到", "driver.checkOut": "签退", "driver.addExpense": "添加费用",
+  "status.pending": "待处理", "status.arrived": "已到达", "status.inProgress": "进行中", "status.completed": "已完成", "status.departed": "已离开", "status.offline": "离线", "status.queued": "等待同步", "status.synced": "已同步",
+  "route.planned": "计划路线", "route.actual": "记录轨迹", "route.eta": "预计到达", "route.ata": "报告到达时间", "route.demo": "演示图 — 非道路导航", "gps.insufficient": "GPS数据不足", "gps.review": "需要复核，并非欺诈证据", "lhs.submit": "提交日报", "lhs.approve": "批准", "lhs.requestRevision": "要求修改", "common.save": "保存", "common.cancel": "取消", "common.retry": "重试"
+}

@@ -1,0 +1,8 @@
+{
+  "name": "@altius/design-tokens",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./tokens.json": "./src/tokens.json", "./tailwind.css": "./src/tailwind.css" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "tsx --test src/*.test.ts" }
+}

@@ -1,0 +1,105 @@
+import 'package:flutter/material.dart';
+
+class Strings {
+  const Strings(this.code);
+  final String code;
+  static const codes = ['en', 'id', 'th', 'ja', 'zh', 'fil', 'vi'];
+  static const names = ['English', 'Bahasa Indonesia', 'ไทย', '日本語', '中文', 'Filipino', 'Tiếng Việt'];
+  static const locales = [Locale('en'), Locale('id'), Locale('th'), Locale('ja'), Locale('zh'), Locale('fil', 'PH'), Locale('vi')];
+  String call(String key) {
+    final values = translations[key];
+    if (values == null) { return '[EN] ${fallback[key] ?? key}'; }
+    final index = codes.indexOf(code);
+    return values[index < 0 ? 0 : index];
+  }
+
+  static const translations = <String, List<String>>{
+    'driverApp': ['Your day. In motion.', 'Hari Anda. Terus bergerak.', 'ทุกวันของคุณ เดินหน้าต่อ', '今日も、前へ。', '每天，向前出发。', 'Ang araw mo. Tuloy ang biyahe.', 'Mỗi ngày. Luôn tiến bước.'],
+    'demo': ['DEMO · Local device only', 'DEMO · Hanya di perangkat', 'DEMO · เฉพาะในอุปกรณ์', 'DEMO · この端末のみ', 'DEMO · 仅保存在设备', 'DEMO · Sa device lang', 'DEMO · Chỉ trên thiết bị'],
+    'demoNotice': ['No real login, server sync or GPS tracking. Do not enter real credentials.', 'Tanpa login asli, sinkron server, atau pelacakan GPS. Jangan masukkan kredensial asli.', 'ไม่มีการเข้าสู่ระบบจริง ซิงค์เซิร์ฟเวอร์ หรือติดตาม GPS อย่าใช้รหัสผ่านจริง', '実際の認証・同期・GPS追跡はありません。本物の認証情報を入力しないでください。', '无真实登录、服务器同步或GPS跟踪。请勿输入真实凭据。', 'Walang totoong login, server sync o GPS tracking. Huwag gumamit ng tunay na password.', 'Không đăng nhập thật, đồng bộ máy chủ hay theo dõi GPS. Không nhập mật khẩu thật.'],
+    'email': ['Demo email', 'Email demo', 'อีเมลสาธิต', 'デモメール', '演示邮箱', 'Demo email', 'Email demo'],
+    'password': ['Demo password', 'Kata sandi demo', 'รหัสผ่านสาธิต', 'デモパスワード', '演示密码', 'Demo password', 'Mật khẩu demo'],
+    'enter': ['Enter demo workspace', 'Masuk ruang kerja demo', 'เข้าสู่พื้นที่สาธิต', 'デモを開始', '进入演示工作区', 'Buksan ang demo', 'Vào không gian demo'],
+    'workspace': ['Workspace', 'Ruang kerja', 'พื้นที่ทำงาน', 'ワークスペース', '工作区', 'Workspace', 'Không gian làm việc'],
+    'organization': ['Organization', 'Organisasi', 'องค์กร', '組織', '组织', 'Organisasyon', 'Tổ chức'],
+    'hub': ['Hub', 'Hub', 'ศูนย์กระจายสินค้า', '拠点', '枢纽', 'Hub', 'Trung tâm'],
+    'continue': ['Continue', 'Lanjutkan', 'ดำเนินการต่อ', '続ける', '继续', 'Magpatuloy', 'Tiếp tục'],
+    'tasks': ['Tasks', 'Tugas', 'งาน', 'タスク', '任务', 'Mga gawain', 'Nhiệm vụ'],
+    'route': ['Route', 'Rute', 'เส้นทาง', 'ルート', '路线', 'Ruta', 'Tuyến đường'],
+    'report': ['Daily report', 'Laporan harian', 'รายงานประจำวัน', '日報', '日报', 'Ulat araw-araw', 'Báo cáo ngày'],
+    'settings': ['Settings', 'Pengaturan', 'การตั้งค่า', '設定', '设置', 'Mga setting', 'Cài đặt'],
+    'hello': ['Ready for the road, Adi?', 'Siap berangkat, Adi?', 'พร้อมออกเดินทางไหม Adi?', 'Adiさん、出発しましょう', 'Adi，准备出发了吗？', 'Handa ka na ba, Adi?', 'Sẵn sàng lên đường, Adi?'],
+    'today': ['Today’s overview', 'Ringkasan hari ini', 'ภาพรวมวันนี้', '今日の概要', '今日概览', 'Buod ng araw', 'Tổng quan hôm nay'],
+    'ongoing': ['Ongoing', 'Berlangsung', 'กำลังดำเนินการ', '進行中', '进行中', 'Kasalukuyan', 'Đang thực hiện'],
+    'done': ['Completed', 'Selesai', 'เสร็จสิ้น', '完了', '已完成', 'Tapos na', 'Hoàn thành'],
+    'assigned': ['Assigned', 'Ditugaskan', 'มอบหมายแล้ว', '割当済み', '已分配', 'Naitalaga', 'Đã giao'],
+    'arrived': ['Arrived', 'Tiba', 'ถึงแล้ว', '到着済み', '已到达', 'Dumating', 'Đã đến'],
+    'working': ['In progress', 'Dikerjakan', 'กำลังทำงาน', '作業中', '作业中', 'Ginagawa', 'Đang làm'],
+    'arrival': ['Report arrival', 'Lapor Tiba', 'รายงานการมาถึง', '到着を報告', '报告到达', 'Iulat ang pagdating', 'Báo đã đến'],
+    'activity': ['Start activity', 'Mulai Aktivitas', 'เริ่มงาน', '作業を開始', '开始作业', 'Simulan ang gawain', 'Bắt đầu hoạt động'],
+    'complete': ['Report completion', 'Lapor Selesai', 'รายงานเสร็จสิ้น', '完了を報告', '报告完成', 'Iulat ang pagtatapos', 'Báo hoàn thành'],
+    'startTrip': ['Start trip', 'Mulai perjalanan', 'เริ่มเดินทาง', '運行を開始', '开始行程', 'Simulan ang biyahe', 'Bắt đầu chuyến'],
+    'endTrip': ['End trip', 'Akhiri perjalanan', 'จบการเดินทาง', '運行を終了', '结束行程', 'Tapusin ang biyahe', 'Kết thúc chuyến'],
+    'tripActive': ['Trip in progress', 'Perjalanan berlangsung', 'กำลังเดินทาง', '運行中', '行程进行中', 'Bumibiyahe', 'Đang trong chuyến'],
+    'tripReady': ['Your next stop awaits', 'Titik berikutnya menanti', 'จุดหมายถัดไปรอคุณอยู่', '次の目的地へ', '下一站等着您', 'Naghihintay ang susunod na hintuan', 'Điểm dừng tiếp theo đang chờ'],
+    'search': ['Search tasks or address', 'Cari tugas atau alamat', 'ค้นหางานหรือที่อยู่', 'タスク・住所を検索', '搜索任务或地址', 'Maghanap ng gawain o address', 'Tìm nhiệm vụ hoặc địa chỉ'],
+    'empty': ['Nothing here yet', 'Belum ada data', 'ยังไม่มีข้อมูล', 'まだデータがありません', '暂无数据', 'Wala pa rito', 'Chưa có dữ liệu'],
+    'pending': ['Pending · not uploaded', 'Menunggu · belum diunggah', 'รอดำเนินการ · ยังไม่อัปโหลด', '保留中・未送信', '待处理 · 尚未上传', 'Nakabinbin · hindi pa na-upload', 'Chờ xử lý · chưa tải lên'],
+    'localSaved': ['Saved on this device', 'Tersimpan di perangkat ini', 'บันทึกในอุปกรณ์นี้แล้ว', '端末に保存しました', '已保存在此设备', 'Naka-save sa device na ito', 'Đã lưu trên thiết bị này'],
+    'history': ['History & outbox', 'Riwayat & antrean', 'ประวัติและกล่องขาออก', '履歴・送信待ち', '历史与待发箱', 'Kasaysayan at outbox', 'Lịch sử và hàng đợi'],
+    'language': ['Language', 'Bahasa', 'ภาษา', '言語', '语言', 'Wika', 'Ngôn ngữ'],
+    'permissions': ['Permissions', 'Izin perangkat', 'สิทธิ์การใช้งาน', '権限', '权限', 'Mga pahintulot', 'Quyền truy cập'],
+    'privacy': ['Privacy', 'Privasi', 'ความเป็นส่วนตัว', 'プライバシー', '隐私', 'Privacy', 'Quyền riêng tư'],
+    'help': ['Troubleshooting', 'Pemecahan masalah', 'แก้ไขปัญหา', 'トラブルシューティング', '故障排除', 'Pag-troubleshoot', 'Khắc phục sự cố'],
+    'logout': ['Leave demo', 'Keluar demo', 'ออกจากการสาธิต', 'デモを終了', '退出演示', 'Lumabas sa demo', 'Thoát demo'],
+    'protected': ['Your local work stays on this device. Nothing is deleted or uploaded.', 'Pekerjaan lokal tetap di perangkat ini. Tidak ada yang dihapus atau diunggah.', 'งานจะยังอยู่ในอุปกรณ์นี้ ไม่มีการลบหรืออัปโหลด', '作業データは端末に残ります。削除・送信されません。', '本地工作保留在设备上，不会删除或上传。', 'Mananatili sa device ang gawain. Walang buburahin o ia-upload.', 'Công việc vẫn được giữ trên thiết bị. Không xóa hay tải lên.'],
+    'costs': ['Operational costs', 'Biaya operasional', 'ค่าใช้จ่ายดำเนินงาน', '運行経費', '运营费用', 'Mga gastos sa operasyon', 'Chi phí vận hành'],
+    'addCost': ['Add cost', 'Tambah biaya', 'เพิ่มค่าใช้จ่าย', '経費を追加', '添加费用', 'Magdagdag ng gastos', 'Thêm chi phí'],
+    'amount': ['Amount (IDR)', 'Jumlah (IDR)', 'จำนวนเงิน (IDR)', '金額（IDR）', '金额（IDR）', 'Halaga (IDR)', 'Số tiền (IDR)'],
+    'note': ['Note / receipt reference', 'Catatan / nomor kuitansi', 'หมายเหตุ / เลขใบเสร็จ', 'メモ・領収書番号', '备注/收据编号', 'Tala / resibo', 'Ghi chú / số biên lai'],
+    'fuel': ['Fuel', 'Bahan bakar', 'เชื้อเพลิง', '燃料', '燃油', 'Gasolina', 'Nhiên liệu'],
+    'toll': ['Toll', 'Tol', 'ค่าทางด่วน', '通行料', '通行费', 'Toll', 'Phí đường bộ'],
+    'parking': ['Parking', 'Parkir', 'ค่าจอดรถ', '駐車料', '停车费', 'Paradahan', 'Phí đỗ xe'],
+    'other': ['Other', 'Lainnya', 'อื่น ๆ', 'その他', '其他', 'Iba pa', 'Khác'],
+    'save': ['Save locally', 'Simpan lokal', 'บันทึกในเครื่อง', '端末に保存', '本地保存', 'I-save sa device', 'Lưu cục bộ'],
+    'cancel': ['Cancel', 'Batal', 'ยกเลิก', 'キャンセル', '取消', 'Kanselahin', 'Hủy'],
+    'submit': ['Submit to local outbox', 'Kirim ke antrean lokal', 'ส่งไปยังกล่องขาออกในเครื่อง', '送信待ちに登録', '提交到本地待发箱', 'Isumite sa lokal na outbox', 'Gửi vào hàng đợi cục bộ'],
+    'submitted': ['Submitted locally · pending upload', 'Terkirim lokal · menunggu unggah', 'ส่งในเครื่องแล้ว · รออัปโหลด', '端末に登録済み・未送信', '已本地提交 · 待上传', 'Naisumite sa device · pending upload', 'Đã gửi cục bộ · chờ tải lên'],
+    'visited': ['Visited', 'Dikunjungi', 'เยี่ยมชมแล้ว', '訪問済み', '已访问', 'Nabisita', 'Đã ghé'],
+    'total': ['Total', 'Total', 'รวม', '合計', '合计', 'Kabuuan', 'Tổng'],
+    'planned': ['Planned route', 'Rute rencana', 'เส้นทางที่วางแผน', '計画ルート', '计划路线', 'Planong ruta', 'Tuyến dự kiến'],
+    'simulated': ['Simulated trail', 'Jejak simulasi', 'เส้นทางจำลอง', 'シミュレーション軌跡', '模拟轨迹', 'Simuladong ruta', 'Lộ trình mô phỏng'],
+    'schematic': ['Offline schematic · not a navigation map', 'Skema offline · bukan peta navigasi', 'แผนผังออฟไลน์ · ไม่ใช่แผนที่นำทาง', 'オフライン概略図・ナビではありません', '离线示意图 · 非导航地图', 'Offline na diagram · hindi pang-navigate', 'Sơ đồ ngoại tuyến · không phải bản đồ dẫn đường'],
+    'eta': ['Demo ETA', 'ETA demo', 'เวลาถึงโดยประมาณสาธิต', 'デモ到着予測', '演示预计到达', 'Demo ETA', 'ETA demo'],
+    'ata': ['Device arrival', 'Tiba perangkat', 'เวลาถึงจากอุปกรณ์', '端末で記録した到着', '设备到达记录', 'Pagdating sa device', 'Giờ đến trên thiết bị'],
+    'noGps': ['No GPS or vehicle feed connected', 'Tidak ada koneksi GPS atau kendaraan', 'ไม่ได้เชื่อมต่อ GPS หรือข้อมูลรถ', 'GPS・車両データ未接続', '未连接GPS或车辆数据', 'Walang nakakonektang GPS o vehicle feed', 'Chưa kết nối GPS hoặc dữ liệu xe'],
+    'safety': ['Safety & route signals', 'Keselamatan & sinyal rute', 'ความปลอดภัยและสัญญาณเส้นทาง', '安全・ルート情報', '安全与路线信号', 'Kaligtasan at signal ng ruta', 'An toàn và tín hiệu tuyến'],
+    'min': ['min', 'mnt', 'นาที', '分', '分钟', 'min', 'phút'],
+    'next': ['Next stop', 'Titik berikutnya', 'จุดถัดไป', '次の目的地', '下一站', 'Susunod na hintuan', 'Điểm tiếp theo'],
+    'detail': ['Stop details', 'Detail titik', 'รายละเอียดจุดหมาย', '訪問先の詳細', '站点详情', 'Detalye ng hintuan', 'Chi tiết điểm dừng'],
+    'timeline': ['Activity timeline', 'Linimasa aktivitas', 'ลำดับกิจกรรม', '作業履歴', '活动时间线', 'Timeline ng gawain', 'Dòng thời gian hoạt động'],
+    'confirmReport': ['Lock today’s report? You cannot add costs after submitting. No upload takes place.', 'Kunci laporan hari ini? Biaya tidak dapat ditambah setelah dikirim. Tidak ada unggahan.', 'ล็อกรายงานวันนี้? เพิ่มค่าใช้จ่ายไม่ได้หลังส่ง ไม่มีการอัปโหลด', '今日の日報を確定しますか？確定後は経費を追加できません。送信はされません。', '锁定今日日报？提交后无法添加费用。不会上传。', 'I-lock ang ulat? Hindi na makakadagdag ng gastos. Walang upload.', 'Khóa báo cáo hôm nay? Không thể thêm chi phí sau khi gửi. Không tải lên.'],
+    'required': ['Enter valid demo details', 'Isi data demo yang valid', 'กรอกข้อมูลสาธิตให้ถูกต้อง', '有効なデモ情報を入力', '请输入有效演示信息', 'Maglagay ng wastong demo details', 'Nhập thông tin demo hợp lệ'],
+    'unsyncedProtected': ['Workspace is locked while unsynced work exists. Your data is protected.', 'Ruang kerja dikunci selama ada data belum sinkron. Data Anda dilindungi.', 'พื้นที่ทำงานถูกล็อกขณะมีงานที่ยังไม่ซิงค์ ข้อมูลได้รับการปกป้อง', '未送信の作業があるため変更できません。データは保護されています。', '存在未同步工作，工作区已锁定，数据受到保护。', 'Naka-lock ang workspace habang may hindi naka-sync. Protektado ang data.', 'Không gian bị khóa khi còn công việc chưa đồng bộ. Dữ liệu được bảo vệ.'],
+    'startTripFirst': ['Start your trip first', 'Mulai perjalanan dahulu', 'เริ่มการเดินทางก่อน', '先に運行を開始してください', '请先开始行程', 'Simulan muna ang biyahe', 'Hãy bắt đầu chuyến trước'],
+    'endTripFirst': ['End your trip before submitting', 'Akhiri perjalanan sebelum kirim', 'จบการเดินทางก่อนส่ง', '運行を終了してから登録してください', '请结束行程后提交', 'Tapusin ang biyahe bago isumite', 'Kết thúc chuyến trước khi gửi'],
+    'finishActivity': ['Complete the active stop first', 'Selesaikan titik aktif dahulu', 'ทำจุดปัจจุบันให้เสร็จก่อน', '現在の作業を完了してください', '请先完成当前站点', 'Tapusin muna ang aktibong gawain', 'Hoàn thành điểm hiện tại trước'],
+    'reportLocked': ['Today’s report is already locked', 'Laporan hari ini sudah dikunci', 'รายงานวันนี้ถูกล็อกแล้ว', '今日の日報は確定済みです', '今日日报已锁定', 'Naka-lock na ang ulat ngayon', 'Báo cáo hôm nay đã khóa'],
+    'invalidSequence': ['Action already recorded or out of order', 'Tindakan sudah tercatat atau tidak berurutan', 'บันทึกแล้วหรือลำดับไม่ถูกต้อง', '記録済み、または順序が異なります', '操作已记录或顺序无效', 'Naitala na o mali ang pagkakasunod', 'Đã ghi hoặc sai thứ tự'],
+    'invalidCost': ['Enter a positive whole amount, up to IDR 100,000,000', 'Isi bilangan bulat positif, maksimal IDR 100.000.000', 'กรอกจำนวนเต็มบวกไม่เกิน IDR 100,000,000', '1〜100,000,000 IDRの整数を入力', '请输入不超过100,000,000 IDR的正整数', 'Maglagay ng positibong buong halaga hanggang IDR 100,000,000', 'Nhập số nguyên dương, tối đa 100.000.000 IDR'],
+    'clockChanged': ['Device clock moved backwards. Correct device time before continuing.', 'Jam perangkat mundur. Perbaiki waktu perangkat sebelum lanjut.', 'เวลาอุปกรณ์ย้อนกลับ โปรดแก้ไขเวลาก่อนดำเนินการต่อ', '端末の時計が戻っています。時刻を修正してください。', '设备时间倒退，请校正时间后继续。', 'Bumalik ang oras ng device. Itama ito bago magpatuloy.', 'Đồng hồ thiết bị lùi. Hãy sửa giờ trước khi tiếp tục.'],
+    'storageError': ['Could not save. Your action was not confirmed. Please retry.', 'Gagal menyimpan. Tindakan belum dikonfirmasi. Coba lagi.', 'บันทึกไม่ได้ ยังไม่ยืนยันการดำเนินการ โปรดลองอีกครั้ง', '保存できませんでした。操作は未確定です。再試行してください。', '保存失败，操作未确认，请重试。', 'Hindi na-save. Hindi nakumpirma ang aksyon. Subukan muli.', 'Không lưu được. Thao tác chưa xác nhận. Hãy thử lại.'],
+  };
+  static const fallback = <String, String>{
+    'fallbackNotice': 'Some technical details use English, marked [EN]. Unsupported locales fall back to English.',
+    'permissionsBody': 'Location, camera, microphone and notifications are not requested in this demo. No background tracking runs. Device arrival times are real button timestamps, not GPS-verified arrival.',
+    'privacyBody': 'All work is stored in SQLite in this app’s private device storage. No credentials are stored. No analytics, backend, vehicle GPS, or external map requests run. Uninstalling the app or clearing its storage destroys local work. Do not use this demo for production operations.',
+    'helpBody': 'Storage: SQLite with atomic task + outbox commits. Transport: not configured. Pending events are never marked uploaded, pruned or automatically deleted. Keep this installation until a real, authenticated sync and export workflow is implemented.',
+    'safetyBody': 'SIMULATED ONLY. The amber route segment represents a fixture deviation of 180 m from a 100 m corridor. App/vehicle GPS anomaly example: 240 m variance against a 150 m threshold. No actual positions or sensors were sampled. These are not live alerts or safety advice.',
+    'routeBody': 'ETA uses Dijkstra shortest paths on a small demo graph, not road traffic. Device ATA is your locally recorded arrival button time. The dashed trail is simulated and is never presented as actual GPS. No Google Maps key is required for this offline schematic.',
+    'deliveryBody': 'Delivery instructions: confirm the shipment reference with the receiving contact. This demo records three steps only. Photo, signature, barcode and voice evidence are not collected.',
+    'authHelp': 'Authentication preview',
+    'authHelpBody': 'DEMO ONLY. OTP, cloud authenticator, password recovery and password changes require a real identity provider. No verification codes, emails or password changes are sent. Return to the demo login to continue.',
+    'workspaceBody': 'Workspace labels are demonstration selectors; the four Jakarta fixture stops remain the same in every hub. Unsynced work prevents changing the workspace.',
+  };
+}

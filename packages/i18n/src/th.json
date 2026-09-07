@@ -1,0 +1,6 @@
+{
+  "app.name": "Altius Field", "nav.dashboard": "แดชบอร์ด", "nav.tasks": "งาน", "nav.route": "เส้นทาง", "nav.lhs": "รายงานประจำวันคนขับ", "nav.anomaly": "ตรวจสอบ GPS", "nav.settings": "การตั้งค่า", "nav.history": "ประวัติ", "nav.signOut": "ออกจากระบบ",
+  "driver.arrive": "รายงานการมาถึง", "driver.start": "เริ่มกิจกรรม", "driver.complete": "รายงานเสร็จสิ้น", "driver.depart": "รายงานการออกเดินทาง", "driver.nextStop": "จุดถัดไป", "driver.navigate": "นำทาง", "driver.checkIn": "ลงเวลาเข้า", "driver.checkOut": "ลงเวลาออก", "driver.addExpense": "เพิ่มค่าใช้จ่าย",
+  "status.pending": "รอดำเนินการ", "status.arrived": "มาถึงแล้ว", "status.inProgress": "กำลังดำเนินการ", "status.completed": "เสร็จสิ้น", "status.departed": "ออกเดินทางแล้ว", "status.offline": "ออฟไลน์", "status.queued": "รอซิงค์", "status.synced": "ซิงค์แล้ว",
+  "route.planned": "เส้นทางที่วางแผน", "route.actual": "เส้นทางที่บันทึก", "route.eta": "เวลาถึงโดยประมาณ", "route.ata": "เวลาที่รายงานการมาถึง", "route.demo": "กราฟสาธิต — ไม่ใช่เส้นทางถนน", "gps.insufficient": "ข้อมูล GPS ไม่เพียงพอ", "gps.review": "ต้องตรวจสอบ ไม่ใช่หลักฐานการทุจริต", "lhs.submit": "ส่งรายงาน", "lhs.approve": "อนุมัติ", "lhs.requestRevision": "ขอแก้ไข", "common.save": "บันทึก", "common.cancel": "ยกเลิก", "common.retry": "ลองอีกครั้ง"
+}

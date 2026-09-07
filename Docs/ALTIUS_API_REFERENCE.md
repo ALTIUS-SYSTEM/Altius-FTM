@@ -1,0 +1,727 @@
+# Altius FTM — API Endpoint Reference
+
+> **Source:** Reverse-engineered from `app.paket.mile_field` v1.40.8  
+> **Base URL:** `{BASE_URL}/api/v3`  
+> **Date:** 2026-09-07  
+
+---
+
+## Table of Contents
+
+1. [Environment Endpoints](#1-environment-endpoints)
+2. [Authentication API](#2-authentication-api)
+3. [User API](#3-user-api)
+4. [Organization API](#4-organization-api)
+5. [OTP API](#5-otp-api)
+6. [Cloud Authenticator API](#6-cloud-authenticator-api)
+7. [Task API](#7-task-api)
+8. [Flow API](#8-flow-api)
+9. [Data Source API](#9-data-source-api)
+10. [Currency API](#10-currency-api)
+11. [Custom Modules API](#11-custom-modules-api)
+12. [Location History API](#12-location-history-api)
+13. [Device Token API](#13-device-token-api)
+14. [Main Menu API](#14-main-menu-api)
+15. [Media Upload API](#15-media-upload-api)
+16. [Troubleshooting API](#16-troubleshooting-api)
+17. [Privacy Policy API](#17-privacy-policy-api)
+18. [Version API](#18-version-api)
+19. [Keys API](#19-keys-api)
+20. [Webhook API](#20-webhook-api)
+21. [Maps API](#21-maps-api)
+22. [WebView API](#22-webview-api)
+23. [Obfuscated Endpoints](#23-obfuscated-endpoints)
+
+---
+
+## 1. Environment Endpoints
+
+| Flavor | Base URL | Web Origin | S3 Region |
+|---|---|---|---|
+| Production | `https://apiweb.mile.app/api/v3` | `https://web.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
+| Development | `https://apiwebdev.mile.app/api/v3` | `https://webdev.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
+| Beta | `https://apiwebbeta.mile.app/api/v3` | `https://webbeta.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
+| Sandbox | `https://apiwebsandbox.mile.app/api/v3` | `https://websandbox.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
+| Unilever | `https://uliapiweb.mile.app/api/v3` | `https://web.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
+| Unilever Sandbox | `https://apiwebsandbox.mile.app/api/v3` | `https://web.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
+| Y3 | `https://apiweb.mile.app/api/v3` | `https://web.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
+| Y3 Sandbox | `https://apiwebsandbox.mile.app/api/v3` | `https://websandbox.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
+
+### HMS Integration
+
+| Environment | HMS URL |
+|---|---|
+| Production | `https://hmslms.mile.app/hms/elicense/road-hazard-awareness` |
+| Sandbox/Dev/Beta | `https://hmslmssandbox.mile.app/hms/elicense/road-hazard-awareness` |
+
+### Unilever Integration
+
+| Environment | Unilever Base URL |
+|---|---|
+| Production | `https://unilever.mile.app` |
+| Dev/Sandbox | `https://unileverdev.mile.app` |
+
+---
+
+## 2. Authentication API
+
+### POST /auth
+Login with email and password.
+
+**Request:**
+```json
+{
+  "email": "user@example.com",
+  "password": "hashed_password"
+}
+```
+
+**Response (success):**
+```json
+{
+  "token": "jwt_bearer_token",
+  "expires_in": 3600,
+  "user": {
+    "id": "user_id",
+    "email": "user@example.com",
+    "name": "User Name",
+    "org_id": "org_id",
+    "hub_id": "hub_id",
+    "role": "field_worker"
+  }
+}
+```
+
+**Response (MFA required):**
+```json
+{
+  "mfa_required": true,
+  "mfa_type": "otp" | "totp",
+  "mfa_token": "verification_token"
+}
+```
+
+**Response (password expired):**
+```json
+{
+  "password_expired": true,
+  "change_password_token": "temp_token"
+}
+```
+
+### POST /logout
+Invalidate current session token.
+
+**Headers:** `Authorization: Bearer {token}`
+
+---
+
+## 3. User API
+
+### GET /user
+Get current user profile.
+
+### POST /user/forgot-password
+Request password recovery.
+
+**Request:**
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+### POST /user/change-password
+Change password (for expired password or voluntary change).
+
+**Request:**
+```json
+{
+  "old_password": "old_hashed",
+  "new_password": "new_hashed"
+}
+```
+
+---
+
+## 4. Organization API
+
+### GET /organizations
+List all organizations available to the current user.
+
+**Response:**
+```json
+{
+  "organizations": [
+    {
+      "id": "org_id",
+      "name": "Organization Name",
+      "configuration": { ... },
+      "is_avian": false
+    }
+  ]
+}
+```
+
+### POST /organization/switch
+Switch to a different organization. Clears previous org context.
+
+**Request:**
+```json
+{
+  "organization_id": "org_id"
+}
+```
+
+**Response:**
+```json
+{
+  "token": "new_jwt_token",
+  "configuration": { ... }
+}
+```
+
+---
+
+## 5. OTP API
+
+### POST /otp/send
+Send OTP code to recipient (SMS or email).
+
+**Request:**
+```json
+{
+  "recipient": "phone_or_email",
+  "service_sender": "sms" | "email"
+}
+```
+
+### POST /otp/verify
+Verify OTP code.
+
+**Request:**
+```json
+{
+  "code": "123456",
+  "mfa_token": "verification_token"
+}
+```
+
+**Response (success):**
+```json
+{
+  "verified": true,
+  "token": "jwt_bearer_token"
+}
+```
+
+**Response (failure):**
+```json
+{
+  "verified": false,
+  "message": "Invalid code",
+  "attempts_remaining": 2
+}
+```
+
+---
+
+## 6. Cloud Authenticator API
+
+### POST /cloud-authenticator
+Initialize TOTP authenticator setup.
+
+### POST /cloud-authenticator/verify
+Verify TOTP code from authenticator app.
+
+**Request:**
+```json
+{
+  "code": "123456"
+}
+```
+
+---
+
+## 7. Task API
+
+### GET /tasks
+Get task list for current user (filtered by org, hub, status).
+
+**Query Parameters:**
+- `status` — `ongoing` | `done` | `pending`
+- `hub_id` — filter by hub
+- `page` — pagination
+- `limit` — page size
+
+### GET /task/{id}
+Get task detail by ID.
+
+**Response:**
+```json
+{
+  "id": "task_id",
+  "title": "Task Title",
+  "flow_id": "flow_id",
+  "hub_id": "hub_id",
+  "assignee_id": "user_id",
+  "status": "ongoing",
+  "data": { ... },
+  "created_at": "2026-09-07T00:00:00Z",
+  "updated_at": "2026-09-07T00:00:00Z"
+}
+```
+
+### POST /task-create
+Create a new task.
+
+**Request:**
+```json
+{
+  "flow_id": "flow_id",
+  "hub_id": "hub_id",
+  "title": "Task Title",
+  "assignee_id": "user_id"
+}
+```
+
+### POST /tasks/bulk
+Bulk update tasks (status, data).
+
+**Request:**
+```json
+{
+  "tasks": [
+    { "id": "task_id", "status": "done", "data": { ... } }
+  ]
+}
+```
+
+### POST /task/photo/
+Upload photo for a task.
+
+**Request:** `multipart/form-data`
+- `task_id` — task ID
+- `page_id` — page ID
+- `component_id` — component ID
+- `file` — image file
+- `category` — photo category (optional)
+
+### POST /task/video/
+Upload video for a task.
+
+**Request:** `multipart/form-data`
+- `task_id` — task ID
+- `page_id` — page ID
+- `component_id` — component ID
+- `file` — video file
+
+### POST /voice/
+Upload voice recording.
+
+### POST /compressed/
+Upload compressed media (compressed video/images).
+
+---
+
+## 8. Flow API
+
+### GET /flow/{id}
+Get flow definition by ID.
+
+**Response:**
+```json
+{
+  "id": "flow_id",
+  "name": "Flow Name",
+  "pages": [
+    {
+      "id": "page_id",
+      "title": "Page Title",
+      "components": [
+        {
+          "id": "component_id",
+          "type": "photo" | "video" | "input" | "select" | "list" | "bill" | "scan_display" | "otp" | "capture" | "voice" | "print" | "view" | "subpage",
+          "required": true,
+          "configuration": { ... }
+        }
+      ]
+    }
+  ],
+  "version": 3
+}
+```
+
+### GET /flows/check-version
+Check if flow data version has changed.
+
+**Request:**
+```json
+{
+  "current_version": 3
+}
+```
+
+**Response:**
+```json
+{
+  "latest_version": 4,
+  "update_required": true
+}
+```
+
+---
+
+## 9. Data Source API
+
+### GET /data-source-list
+List all data sources for current org.
+
+### GET /data-type-list
+List data types for a data source.
+
+### GET /data-types
+Get entity data type definitions.
+
+### GET /data
+Get entity data records.
+
+**Query Parameters:**
+- `data_type_id` — filter by data type
+- `search` — search query
+- `page` — pagination
+- `limit` — page size
+
+### GET /data-version
+Check data version for sync.
+
+---
+
+## 10. Currency API
+
+### GET /currency
+List all currencies for current org.
+
+**Response:**
+```json
+{
+  "currencies": [
+    { "id": "cur_id", "code": "IDR", "name": "Indonesian Rupiah", "symbol": "Rp" }
+  ]
+}
+```
+
+---
+
+## 11. Custom Modules API
+
+### GET /custom-modules
+List custom modules for current org.
+
+### GET /custom-module/{id}
+Get custom module detail.
+
+**Response:**
+```json
+{
+  "id": "module_id",
+  "name": "Module Name",
+  "url": "https://custom.mile.app/module",
+  "icon": "icon_name"
+}
+```
+
+---
+
+## 12. Location History API
+
+### POST /location-history/bulk
+Bulk upload location history records.
+
+**Request:**
+```json
+{
+  "records": [
+    {
+      "lat": -6.123456,
+      "lng": 106.789012,
+      "accuracy": 5.0,
+      "timestamp": "2026-09-07T08:00:00Z",
+      "connection_state": "wifi"
+    }
+  ]
+}
+```
+
+---
+
+## 13. Device Token API
+
+### POST /device-token
+Register or update FCM token.
+
+**Request:**
+```json
+{
+  "token": "fcm_token_value",
+  "platform": "android",
+  "device_id": "device_identifier"
+}
+```
+
+---
+
+## 14. Main Menu API
+
+### GET /main-menu
+Get main menu configuration for current user.
+
+### GET /main-menu/custom-module
+Get custom modules for main menu.
+
+### GET /main-menu/setting
+Get settings menu items.
+
+### GET /main-menu/task-create
+Get task creation options (available flows).
+
+### GET /main-menu/task-list
+Get task list for main menu.
+
+---
+
+## 15. Media Upload API
+
+### POST /mile_images
+Upload image file.
+
+**Request:** `multipart/form-data`
+- `file` — image file
+
+### POST /mile_files
+Upload generic file.
+
+### POST /mile_images/troubleshooting/
+Upload troubleshooting screenshot.
+
+### POST /compressed/
+Upload compressed media (video compression result).
+
+---
+
+## 16. Troubleshooting API
+
+### POST /troubleshooting
+Submit troubleshooting report.
+
+**Request:**
+```json
+{
+  "api_connection": true,
+  "download_connection": true,
+  "upload_connection": true,
+  "app_version": "1.40.8",
+  "min_version": "1.35.0",
+  "device_info": { ... },
+  "screenshot": "image_url"
+}
+```
+
+---
+
+## 17. Privacy Policy API
+
+### GET /privacy-policy/
+Get privacy policy content.
+
+**Response:**
+```json
+{
+  "title": "Privacy Policy",
+  "content": "HTML or markdown content",
+  "version": "1.0"
+}
+```
+
+---
+
+## 18. Version API
+
+### GET /version/
+Check app version requirements.
+
+**Response:**
+```json
+{
+  "latest_version": "1.41.0",
+  "min_version": "1.35.0",
+  "update_required": false,
+  "update_available": true
+}
+```
+
+---
+
+## 19. Keys API
+
+### GET /keys
+Get key-value configuration pairs.
+
+**Response:**
+```json
+{
+  "keys": [
+    { "key": "config_name", "value": "config_value" }
+  ]
+}
+```
+
+---
+
+## 20. Webhook API
+
+### POST /to/
+Send webhook data to configured target URL.
+
+**Request:**
+```json
+{
+  "task_id": "task_id",
+  "page_id": "page_id",
+  "data": { ... }
+}
+```
+
+Page webhooks are configured per flow page. When a task page is completed, the webhook queue processes:
+1. `AddPageWebhookDataToQueueUseCase` — queue webhook data
+2. `SyncPageWebhookUseCase` — process queue, send to target URL
+3. On failure — generate sync failure report
+
+---
+
+## 21. Maps API
+
+### GET /maps/dir/2
+Get map directions between two points.
+
+**Query Parameters:**
+- `origin` — `lat,lng`
+- `destination` — `lat,lng`
+
+---
+
+## 22. WebView API
+
+### GET /web-view
+Get content for embedded WebView display.
+
+Returns web content URL or HTML for in-app WebView rendering.
+
+---
+
+## 23. Obfuscated Endpoints
+
+The following endpoints were extracted but their purpose is not clearly identified. They are likely internal API paths, short codes, or encoded identifiers:
+
+| Endpoint | Possible Purpose |
+|---|---|
+| `/akn` | Unknown |
+| `/c2q` | Unknown |
+| `/cNr` | Unknown |
+| `/gt4` | Unknown |
+| `/iog` | Unknown |
+| `/jzJ` | Unknown |
+| `/l4d` | Unknown |
+| `/mb4` | Unknown |
+| `/mpF` | Unknown |
+| `/oIn` | Unknown |
+| `/sSp` | Unknown |
+| `/v4b` | Unknown |
+| `/xEW` | Unknown |
+| `/zmB` | Unknown |
+| `/secretH` | Unknown (possibly secret/health check) |
+| `/last` | Last visited page or last sync timestamp |
+| `/trk` | Tracking endpoint |
+| `/barcode` | Barcode scan result submission |
+
+---
+
+## API Authentication
+
+All API requests (except `/auth`, `/otp/send`, `/user/forgot-password`) require:
+
+```
+Authorization: Bearer {jwt_token}
+```
+
+The token is obtained from:
+1. `POST /auth` (login)
+2. `POST /otp/verify` (OTP verification)
+3. `POST /cloud-authenticator/verify` (TOTP verification)
+4. `POST /organization/switch` (org switch returns new token)
+
+Token is stored locally via `SaveTokenToLocalUseCase` and retrieved via `GetTokenFromLocalUseCase`.
+
+---
+
+## API Error Handling
+
+Based on extracted UI labels, the API returns standard HTTP status codes:
+
+| Status | Message Key | Description |
+|---|---|---|
+| 400 | `Bad Request` | Bad request |
+| 401 | (auth guard) | Unauthorized — redirect to login |
+| 402 | `Payment Required` | Payment required |
+| 403 | (permission) | Forbidden — no permission |
+| 404 | `Not Found` | Resource not found |
+| 405 | `Method Not Allowed` | Method not allowed |
+| 406 | `Not Acceptable` | Not acceptable |
+| 409 | (conflict) | Duplicate/conflict |
+| 410 | (gone) | Task removed by admin |
+| 412 | `Precondition Failed` | Precondition failed |
+| 413 | (payload too large) | Media too large |
+| 416 | `Length Required` | Length required |
+| 417 | `Expectation Failed` | Expectation failed |
+| 422 | (validation) | Data validation error |
+| 429 | (rate limit) | Too many requests |
+| 500 | `Internal Server Error` | Server error |
+| 502 | (bad gateway) | Bad gateway |
+| 503 | `Service Unavailable` | Service unavailable |
+| 504 | (timeout) | `connectApiTimeoutMessage` — "Connect API request timed out" |
+
+### Error Response Format
+
+```json
+{
+  "error": true,
+  "message": "Error description",
+  "code": "ERROR_CODE",
+  "details": { ... }
+}
+```
+
+---
+
+## API Sync Strategy
+
+The mobile app uses an **offline-first** strategy:
+
+```
+1. READ: Local DB → if empty/stale → Remote API → save to local
+2. WRITE: Save to local → mark unsynced → queue for sync
+3. SYNC: Upload unsynced data → mark as synced → handle failures
+4. VERSION: Check version → if changed → re-download reference data
+```
+
+Sync triggers:
+- Pull-to-refresh on task list
+- After task completion
+- After check-in/check-out
+- App foreground (lifecycle watcher)
+- Manual sync from settings
+- Background sync (scheduled)
+
+---
+
+*End of API Reference*

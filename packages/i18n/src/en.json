@@ -1,0 +1,6 @@
+{
+  "app.name": "Altius Field", "nav.dashboard": "Dashboard", "nav.tasks": "Tasks", "nav.route": "Route", "nav.lhs": "Driver daily report", "nav.anomaly": "GPS review", "nav.settings": "Settings", "nav.history": "History", "nav.signOut": "Sign out",
+  "driver.arrive": "Report arrival", "driver.start": "Start activity", "driver.complete": "Report completion", "driver.depart": "Report departure", "driver.nextStop": "Next stop", "driver.navigate": "Navigate", "driver.checkIn": "Check in", "driver.checkOut": "Check out", "driver.addExpense": "Add expense",
+  "status.pending": "Pending", "status.arrived": "Arrived", "status.inProgress": "In progress", "status.completed": "Completed", "status.departed": "Departed", "status.offline": "Offline", "status.queued": "Waiting to sync", "status.synced": "Synced",
+  "route.planned": "Planned route", "route.actual": "Recorded trail", "route.eta": "Estimated arrival", "route.ata": "Reported arrival", "route.demo": "Demo graph — not road routing", "gps.insufficient": "Insufficient GPS data", "gps.review": "Review required, not proof of fraud", "lhs.submit": "Submit report", "lhs.approve": "Approve", "lhs.requestRevision": "Request revision", "common.save": "Save", "common.cancel": "Cancel", "common.retry": "Retry"
+}

@@ -1,0 +1,10 @@
+[package]
+name = "altius-schema"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+typedb-driver.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+tracing.workspace = true

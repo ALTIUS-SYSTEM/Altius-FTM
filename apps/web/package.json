@@ -1,0 +1,37 @@
+{
+  "name": "@altius/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@altius/algos": "workspace:*",
+    "@altius/api-contracts": "workspace:*",
+    "@altius/design-tokens": "workspace:*",
+    "@altius/i18n": "workspace:*",
+    "@fontsource/geist": "5.2.6",
+    "@fontsource/public-sans": "5.2.6",
+    "next": "15.5.24",
+    "react": "19.1.9",
+    "react-dom": "19.1.9",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.55.1",
+    "@testing-library/react": "16.3.0",
+    "@types/node": "22.18.0",
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.9",
+    "jsdom": "26.1.0",
+    "typescript": "5.9.2",
+    "vite": "7.3.6",
+    "vitest": "3.2.6"
+  }
+}
