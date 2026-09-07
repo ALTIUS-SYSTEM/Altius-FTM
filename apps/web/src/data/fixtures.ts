@@ -1,8 +1,8 @@
 import { DEMO_DATE, DRIVERS } from "./model";
-import type { DemoState, DemoRecord, TaskStatus } from "./model";
+import type { DemoState, DemoRecord, DemoTaskStatus } from "./model";
 
 const customers = ["Nusantara Market", "Gambir Fresh", "Menteng Corner", "Cikini Grocer", "Senayan Supply", "Kota Warehouse", "Kemang Pantry", "Tebet Central", "Sudirman Office", "Pacific Depot", "Bandung Mart", "Surabaya Fresh"];
-const statuses: TaskStatus[] = ["completed", "completed", "in-progress", "assigned", "unassigned", "in-progress", "failed", "assigned", "completed", "unassigned", "assigned", "in-progress"];
+const statuses: DemoTaskStatus[] = ["completed", "completed", "in-progress", "assigned", "unassigned", "in-progress", "failed", "assigned", "completed", "unassigned", "assigned", "in-progress"];
 const record = (id: string, kind: string, name: string, detail: string, extra: string, hub = "Jakarta", status = "Active"): DemoRecord => ({ id, kind, name, detail, extra, hub, status, archived: false });
 
 export const createFixtures = (): DemoState => ({

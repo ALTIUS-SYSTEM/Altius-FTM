@@ -1,5 +1,5 @@
-import { stateSchema, taskSchema } from "./model";
-import type { DemoState, Task } from "./model";
+import { stateSchema, demoTaskSchema } from "./model";
+import type { DemoState, DemoTask } from "./model";
 import { createFixtures } from "./fixtures";
 
 export const STORAGE_KEY = "altius.web.demo.v1";
@@ -26,13 +26,13 @@ export const createLocalAdapter = (storage: Pick<Storage, "getItem" | "setItem" 
   reset() { storage.removeItem(STORAGE_KEY); return createFixtures(); }
 });
 
-export const filterTasks = (tasks: readonly Task[], filters: { hub: string; search?: string; status?: string; assignee?: string; flow?: string; date?: string }) => tasks.filter(task =>
+export const filterTasks = (tasks: readonly DemoTask[], filters: { hub: string; search?: string; status?: string; assignee?: string; flow?: string; date?: string }) => tasks.filter(task =>
   task.hub === filters.hub && (!filters.search || `${task.title} ${task.id} ${task.address}`.toLowerCase().includes(filters.search.toLowerCase())) &&
   (!filters.status || task.status === filters.status) && (!filters.assignee || task.assignee === filters.assignee) &&
   (!filters.flow || task.flow === filters.flow) && (!filters.date || task.date === filters.date)
 );
-export const validateTask = (task: Task) => {
-  const parsed = taskSchema.parse(task);
+export const validateTask = (task: DemoTask) => {
+  const parsed = demoTaskSchema.parse(task);
   if (parsed.status !== "unassigned" && !parsed.assignee) throw new Error("Assign a driver before changing the task status.");
   return parsed;
 };
@@ -40,7 +40,7 @@ export const csvCell = (value: unknown): string => {
   const text = String(value ?? "");
   return `"${(/^[=+@\-\t\r]/.test(text) ? `'${text}` : text).replaceAll('"', '""')}"`;
 };
-export const tasksCsv = (tasks: readonly Task[]) => [
+export const tasksCsv = (tasks: readonly DemoTask[]) => [
   ["ID", "Title", "Address", "Hub", "Status", "Driver", "Date"].map(csvCell).join(","),
   ...tasks.map(task => [task.id, task.title, task.address, task.hub, task.status, task.assignee, task.date].map(csvCell).join(","))
 ].join("\r\n");

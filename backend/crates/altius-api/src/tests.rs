@@ -18,9 +18,16 @@ fn test_state() -> Arc<AppState> {
         },
         typedb_database: "test".into(),
         google_maps_api_key: None,
+        google_route_mode: crate::config::GoogleRouteMode::Directions,
         openrouter_api_key: None,
         openrouter_model: "test-model".into(),
         cors_origins: vec![],
+        allow_password_grant: false,
+        default_org_id: "altius".into(),
+        default_org_name: "Altius".into(),
+        default_hub_id: "jakarta".into(),
+        default_hub_name: "Jakarta".into(),
+        default_admin_sub: "admin".into(),
     };
     Arc::new(AppState {
         jwks: Jwks::new(config.keycloak.clone()),

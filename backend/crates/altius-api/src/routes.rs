@@ -18,6 +18,8 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v3/health", get(health))
         .route("/api/v3/auth/login", post(login))
+        .route("/api/v3/auth/refresh", post(refresh))
+        .route("/api/v3/auth/me", get(me))
         .route("/api/v3/tasks", get(list_tasks))
         .route("/api/v3/task/{id}", get(get_task))
         .route("/api/v3/task-create", post(create_task))
@@ -25,6 +27,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v3/route/eta", post(eta))
         .route("/api/v3/route/optimize", post(optimize_route))
         .route("/api/v3/route/geocode", post(geocode))
+        .route("/api/v3/places/autocomplete", post(autocomplete))
+        .route("/api/v3/users", get(list_users))
+        .route("/api/v3/hubs", get(list_hubs))
+        .route("/api/v3/drivers", get(list_drivers))
         .route("/api/v3/agent/dispatch-suggestion", post(dispatch_suggestion))
         .route("/api/v3/agent/resume", post(agent_resume))
 }
@@ -39,6 +45,11 @@ async fn login(
     State(s): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<Value>> {
+    if !s.config.allow_password_grant {
+        return Err(ApiError::Unavailable(
+            "resource-owner password grant is disabled".into(),
+        ));
+    }
     if req.username.is_empty() || req.password.is_empty() {
         return Err(ApiError::BadRequest("username and password required".into()));
     }
@@ -48,10 +59,78 @@ async fn login(
         ("username", req.username.as_str()),
         ("password", req.password.as_str()),
     ];
-    let resp = s
-        .http
-        .post(&s.config.keycloak.token_url)
-        .form(&params)
+    let token = exchange_tokens(&s.http, &s.config.keycloak.token_url, &params).await?;
+    Ok(Json(token))
+}
+
+async fn health(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let persistence = if let Some(st) = &s.store {
+        st.ping().await
+    } else {
+        false
+    };
+    Json(json!({
+        "status": "ok",
+        "service": "altius-api",
+        "persistence": persistence,
+        "maps": s.config.google_maps_api_key.is_some(),
+        "maps_mode": format!("{:?}", s.config.google_route_mode).to_lowercase(),
+        "agent": s.config.openrouter_api_key.is_some(),
+    }))
+}
+
+#[derive(serde::Deserialize)]
+struct RefreshRequest {
+    refresh_token: String,
+}
+
+async fn refresh(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<RefreshRequest>,
+) -> ApiResult<Json<Value>> {
+    if req.refresh_token.is_empty() {
+        return Err(ApiError::BadRequest("refresh_token required".into()));
+    }
+    let params = [
+        ("grant_type", "refresh_token"),
+        ("client_id", s.config.keycloak.audience.as_str()),
+        ("refresh_token", req.refresh_token.as_str()),
+    ];
+    let token = exchange_tokens(&s.http, &s.config.keycloak.token_url, &params).await?;
+    Ok(Json(token))
+}
+
+async fn me(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+) -> ApiResult<Json<Value>> {
+    let (org, hub) = store(&s)?
+        .organization_and_hub_of(&principal.subject)
+        .await
+        .map_err(ApiError::Internal)?
+        .unwrap_or_default();
+    Ok(Json(json!({
+        "data": {
+            "subject": principal.subject,
+            "roles": principal.roles,
+            "organization": org,
+            "hub": hub,
+        }
+    })))
+}
+
+
+
+/// Resolve the caller's org — TypeDB membership first, token claim as
+/// fallback for tenants not yet synced.
+async fn exchange_tokens(
+    http: &reqwest::Client,
+    token_url: &str,
+    params: &[(&str, &str)],
+) -> ApiResult<Value> {
+    let resp = http
+        .post(token_url)
+        .form(params)
         .send()
         .await
         .map_err(|e| ApiError::Unavailable(format!("idp unreachable: {e}")))?;
@@ -66,21 +145,11 @@ async fn login(
         .json()
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("idp token parse: {e}")))?;
-    Ok(Json(json!({
+    Ok(json!({
         "accessToken": token.get("access_token").and_then(Value::as_str),
         "refreshToken": token.get("refresh_token").and_then(Value::as_str),
         "expiresIn": token.get("expires_in").and_then(Value::as_u64),
         "tokenType": token.get("token_type").and_then(Value::as_str),
-    })))
-}
-
-async fn health(State(s): State<Arc<AppState>>) -> Json<Value> {
-    Json(json!({
-        "status": "ok",
-        "service": "altius-api",
-        "persistence": s.store.is_some(),
-        "maps": s.config.google_maps_api_key.is_some(),
-        "agent": s.config.openrouter_api_key.is_some(),
     }))
 }
 
@@ -93,15 +162,12 @@ fn store(s: &Arc<AppState>) -> ApiResult<&crate::store::Store> {
 /// Resolve the caller's org — TypeDB membership first, token claim as
 /// fallback for tenants not yet synced.
 async fn org_of(s: &Arc<AppState>, subject: &str, claim: Option<&String>) -> ApiResult<String> {
-    match &s.store {
-        Some(st) => Ok(st
-            .organization_of(subject)
-            .await
-            .map_err(ApiError::Internal)?
-            .or_else(|| claim.cloned())
-            .ok_or(ApiError::Forbidden)?),
-        None => claim.cloned().ok_or(ApiError::Forbidden),
-    }
+    store(s)?
+        .organization_of(subject)
+        .await
+        .map_err(ApiError::Internal)?
+        .or_else(|| claim.cloned())
+        .ok_or(ApiError::Forbidden)
 }
 
 async fn list_tasks(
@@ -159,6 +225,16 @@ async fn sync_events(
     if events.is_empty() || events.len() > 500 {
         return Err(ApiError::BadRequest("batch must contain 1-500 events".into()));
     }
+    let scope = store(&s)?
+        .organization_and_hub_of(&principal.subject)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::Forbidden)?;
+    for ev in &events {
+        if ev.tenant_id != scope.0 || ev.hub_id != scope.1 {
+            return Err(ApiError::BadRequest("event tenant/hub scope mismatch".into()));
+        }
+    }
     let st = store(&s)?;
     let mut receipts = Vec::with_capacity(events.len());
     for ev in &events {
@@ -202,6 +278,51 @@ async fn geocode(
     let maps = MapsClient::new(s.http.clone(), s.config.google_maps_api_key.clone());
     let point = maps.geocode(&req.address).await?;
     Ok(Json(json!({ "data": { "location": point }, "meta": mode_marker(maps.enabled()) })))
+}
+
+#[derive(serde::Deserialize)]
+struct AutocompleteRequest {
+    input: String,
+}
+
+async fn autocomplete(
+    State(s): State<Arc<AppState>>,
+    _principal: AuthUser,
+    Json(req): Json<AutocompleteRequest>,
+) -> ApiResult<Json<Value>> {
+    let maps = MapsClient::new(s.http.clone(), s.config.google_maps_api_key.clone());
+    let suggestions = maps.autocomplete(&req.input).await?;
+    Ok(Json(json!({
+        "data": suggestions,
+        "meta": mode_marker(maps.enabled())
+    })))
+}
+
+async fn list_users(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+) -> ApiResult<Json<Value>> {
+    let org = org_of(&s, &principal.subject, principal.organization_id.as_ref()).await?;
+    let users = store(&s)?.users_for_org(&org).await.map_err(ApiError::Internal)?;
+    Ok(Json(json!({ "data": users, "meta": { "organization": org } })))
+}
+
+async fn list_hubs(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+) -> ApiResult<Json<Value>> {
+    let org = org_of(&s, &principal.subject, principal.organization_id.as_ref()).await?;
+    let hubs = store(&s)?.hubs_for_org(&org).await.map_err(ApiError::Internal)?;
+    Ok(Json(json!({ "data": hubs, "meta": { "organization": org } })))
+}
+
+async fn list_drivers(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+) -> ApiResult<Json<Value>> {
+    let org = org_of(&s, &principal.subject, principal.organization_id.as_ref()).await?;
+    let drivers = store(&s)?.drivers_for_org(&org).await.map_err(ApiError::Internal)?;
+    Ok(Json(json!({ "data": drivers, "meta": { "organization": org } })))
 }
 
 fn dispatch_tools(state: &Arc<AppState>) -> Vec<agent::Tool> {

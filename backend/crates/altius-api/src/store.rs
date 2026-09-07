@@ -299,4 +299,109 @@ impl Store {
             Err(_) => false,
         }
     }
+
+    /// Insert the default organization and hub if they do not exist.
+    pub async fn ensure_default_org_hub(&self, config: &crate::config::Config) -> anyhow::Result<()> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for provisioning")?;
+        let q = format!(
+            r#"insert
+                $o isa organization, has org-id "{org}", has display-name "{org_name}";
+                $h isa hub, has hub-id "{hub}", has display-name "{hub_name}";
+                allocation (org: $o, hub: $h);"#,
+            org = Self::esc(&config.default_org_id),
+            org_name = Self::esc(&config.default_org_name),
+            hub = Self::esc(&config.default_hub_id),
+            hub_name = Self::esc(&config.default_hub_name),
+        );
+        // TypeDB ignores inserts that violate key uniqueness, so the statement is safe to replay.
+        tx.query(&q).await.context("insert default org/hub")?;
+        tx.commit().await.context("commit default org/hub")?;
+        Ok(())
+    }
+
+    /// Link the configured default admin subject to the default organization.
+    pub async fn link_admin_user(&self, config: &crate::config::Config) -> anyhow::Result<()> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for admin link")?;
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+            insert
+                $u isa user, has user-sub "{sub}";
+                membership (member: $u, org: $o);"#,
+            org = Self::esc(&config.default_org_id),
+            sub = Self::esc(&config.default_admin_sub),
+        );
+        tx.query(&q).await.context("link admin user")?;
+        tx.commit().await.context("commit admin link")?;
+        Ok(())
+    }
+
+    /// Resolve the organization and first hub bound to a principal subject.
+    pub async fn organization_and_hub_of(
+        &self,
+        subject: &str,
+    ) -> anyhow::Result<Option<(Id, Id)>> {
+        let q = format!(
+            r#"match
+                $u isa user, has user-sub "{}";
+                membership (member: $u, org: $o);
+                $o has org-id $oid;
+                allocation (org: $o, hub: $h);
+                $h has hub-id $hid;
+            fetch {{ "org": $oid, "hub": $hid }};"#,
+            Self::esc(subject)
+        );
+        let rows = self.fetch_all(&q).await?;
+        Ok(rows.first().and_then(|d| {
+            let org = d.get("org").and_then(|v| v.as_str()).map(str::to_string)?;
+            let hub = d.get("hub").and_then(|v| v.as_str()).map(str::to_string)?;
+            Some((org, hub))
+        }))
+    }
+
+    /// Users belonging to an organization.
+    pub async fn users_for_org(&self, org_id: &str) -> anyhow::Result<Vec<Value>> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                membership (member: $u, org: $o);
+            fetch {{ "user": {{ $u.* }} }};"#,
+            org = Self::esc(org_id)
+        );
+        self.fetch_all(&q).await
+    }
+
+    /// Hubs allocated to an organization.
+    pub async fn hubs_for_org(&self, org_id: &str) -> anyhow::Result<Vec<Value>> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                allocation (org: $o, hub: $h);
+            fetch {{ "hub": {{ $h.* }} }};"#,
+            org = Self::esc(org_id)
+        );
+        self.fetch_all(&q).await
+    }
+
+    /// Users with a `driver` role assignment within an organization.
+    pub async fn drivers_for_org(&self, org_id: &str) -> anyhow::Result<Vec<Value>> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                membership (member: $u, org: $o);
+                $r isa role, has role-name "driver";
+                assignment (member: $u, role: $r);
+            fetch {{ "driver": {{ $u.* }} }};"#,
+            org = Self::esc(org_id)
+        );
+        self.fetch_all(&q).await
+    }
 }

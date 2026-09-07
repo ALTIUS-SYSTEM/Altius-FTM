@@ -13,9 +13,6 @@
   },
   "dependencies": {
     "@altius/algos": "workspace:*",
-    "@altius/api-contracts": "workspace:*",
-    "@altius/design-tokens": "workspace:*",
-    "@altius/i18n": "workspace:*",
     "@fontsource/geist": "5.2.6",
     "@fontsource/public-sans": "5.2.6",
     "next": "15.5.24",

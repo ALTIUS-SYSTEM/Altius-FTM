@@ -12,6 +12,7 @@ mod tests;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use axum::http::{header::HeaderValue, Method};
 use axum::Router;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -37,21 +38,24 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
     let jwks = Jwks::new(config.keycloak.clone());
-    let store = match (
-        std::env::var("TYPEDB_ADDRESS").ok(),
-        std::env::var("TYPEDB_USERNAME").ok(),
-        std::env::var("TYPEDB_PASSWORD").ok(),
-    ) {
-        (Some(addr), Some(user), Some(pass)) => {
-            let driver = altius_schema::connect(&addr, &user, &pass).await?;
-            altius_schema::migrate(&driver, &config.typedb_database).await?;
-            Some(store::Store::new(driver, config.typedb_database.clone()))
-        }
-        _ => {
-            tracing::warn!("TYPEDB_* not set; running without persistence (demo mode)");
-            None
-        }
-    };
+
+    let typedb_addr = std::env::var("TYPEDB_ADDRESS")
+        .context("TYPEDB_ADDRESS required for production mode")?;
+    let typedb_user = std::env::var("TYPEDB_USERNAME")
+        .context("TYPEDB_USERNAME required for production mode")?;
+    let typedb_pass = std::env::var("TYPEDB_PASSWORD")
+        .context("TYPEDB_PASSWORD required for production mode")?;
+    let driver = altius_schema::connect(&typedb_addr, &typedb_user, &typedb_pass).await?;
+    altius_schema::migrate(&driver, &config.typedb_database).await?;
+    let store = store::Store::new(driver, config.typedb_database.clone());
+    store
+        .ensure_default_org_hub(&config)
+        .await
+        .context("provision default organization and hub")?;
+    store
+        .link_admin_user(&config)
+        .await
+        .context("link default admin user")?;
 
     let cors = cors_layer(&config);
 
@@ -59,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         config,
         jwks,
         http: reqwest::Client::new(),
-        store,
+        store: Some(store),
     });
 
     let app = Router::new()

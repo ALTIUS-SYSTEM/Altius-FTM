@@ -20,6 +20,8 @@ const DIRECTIONS_URL: &str = "https://maps.googleapis.com/maps/api/directions/js
 const MATRIX_URL: &str =
     "https://maps.googleapis.com/maps/api/distancematrix/json";
 const GEOCODE_URL: &str = "https://maps.googleapis.com/maps/api/geocode/json";
+const PLACES_URL: &str =
+    "https://maps.googleapis.com/maps/api/place/autocomplete/json";
 
 /// Google enforces ~50 QPS per key on the web services — pace accordingly.
 const MIN_INTERVAL: Duration = Duration::from_millis(20);
@@ -101,6 +103,20 @@ struct MatrixElement {
     status: String,
     #[serde(default)]
     duration: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AutocompleteResponse {
+    status: String,
+    #[serde(default)]
+    predictions: Vec<AutocompletePrediction>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AutocompletePrediction {
+    description: String,
+    #[serde(default)]
+    place_id: String,
 }
 
 /// Ordered result of a stop-optimization call.
@@ -302,6 +318,35 @@ impl MapsClient {
                         }
                     })
                     .collect()
+            })
+            .collect())
+    }
+
+    /// Address text → list of autocomplete suggestions.
+    pub async fn autocomplete(&self, input: &str) -> Result<Vec<serde_json::Value>, ApiError> {
+        let res: AutocompleteResponse = self
+            .get(
+                PLACES_URL,
+                &[
+                    ("input", input.to_string()),
+                    ("key", self.key()?.to_string()),
+                ],
+            )
+            .await?;
+        if res.status == "ZERO_RESULTS" {
+            return Ok(vec![]);
+        }
+        if res.status != "OK" {
+            return Err(ApiError::Unavailable(format!("places: {}", res.status)));
+        }
+        Ok(res
+            .predictions
+            .into_iter()
+            .map(|p| {
+                json!({
+                    "description": p.description,
+                    "placeId": p.place_id,
+                })
             })
             .collect())
     }

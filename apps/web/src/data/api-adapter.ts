@@ -2,7 +2,7 @@
 
 import type { DemoAdapter } from "./adapter";
 import { createLocalAdapter } from "./adapter";
-import type { DemoState, Task, TaskStatus } from "./model";
+import type { DemoState, DemoTask, DemoTaskStatus } from "./model";
 import { createFixtures } from "./fixtures";
 
 /**
@@ -32,7 +32,7 @@ const leaf = (v: unknown): unknown => {
 const flatten = (obj: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, leaf(v)]));
 
-const mapStatus = (stage: string): TaskStatus => {
+const mapStatus = (stage: string): DemoTaskStatus => {
   switch (stage) {
     case "completed":
       return "completed";
@@ -59,7 +59,7 @@ const normalizeStops = (doc: TaskDoc): Record<string, unknown>[] => {
   return out;
 };
 
-const toTask = (doc: TaskDoc): Task => {
+const toTask = (doc: TaskDoc): DemoTask => {
   const root = doc.task ? flatten(doc.task) : flatten(doc);
   const stops = normalizeStops(doc);
   const firstStop = stops[0];
@@ -73,7 +73,7 @@ const toTask = (doc: TaskDoc): Task => {
     status: mapStatus(String(root.stage ?? "assigned")),
     date: String(root.day ?? ""),
     time: String(root.time ?? ""),
-    priority: ["Normal", "High"].includes(String(root.priority)) ? (String(root.priority) as Task["priority"]) : "Normal",
+    priority: ["Normal", "High"].includes(String(root.priority)) ? (String(root.priority) as DemoTask["priority"]) : "Normal",
     notes: String(root.notes ?? ""),
     arrival: root.arrival ? String(root.arrival) : undefined,
     departure: root.departure ? String(root.departure) : undefined,
