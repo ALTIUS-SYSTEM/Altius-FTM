@@ -3,14 +3,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:share_plus/share_plus.dart';
 import 'core/data/work_store.dart';
 import 'core/l10n/strings.dart';
 import 'core/services/route_service.dart';
 import 'core/theme/app_theme.dart';
 import 'features/work/work_cubit.dart';
 
-/// Altius Field demo driver app. All data stays on-device in SQLite;
-/// no authentication, sync transport, GPS sampling or map provider is configured.
+/// Altius Field driver app. Live mode uses PKCE against Keycloak and syncs
+/// to the Altius API; demo mode keeps all data on-device in SQLite.
 class AltiusApp extends StatelessWidget {
   const AltiusApp({super.key, required this.cubit, required this.environment});
   final WorkCubit cubit;
@@ -515,6 +516,15 @@ class _ReportTabState extends State<ReportTab> {
                 if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s('copied'))));
               },
               label: Text(s('copyJson')),
+            )),
+            const SizedBox(width: 10),
+            Expanded(child: OutlinedButton.icon(
+              icon: const Icon(Icons.share_rounded, size: 18),
+              onPressed: () async {
+                final text = await cubit.store.reportText(today);
+                await SharePlus.instance.share(ShareParams(text: text, subject: 'Laporan Harian Sopir'));
+              },
+              label: Text(s('share')),
             )),
           ])),
           const SizedBox(height: 16),

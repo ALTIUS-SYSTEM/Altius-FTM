@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:altius_field/core/data/work_store.dart';
@@ -31,6 +32,35 @@ void main() {
       expect(() => parseServerUrl(bad), throwsArgumentError, reason: bad);
     }
     expect(parseServerUrl('  https://api.altius.test  ').host, 'api.altius.test');
+  });
+
+  test('odometer readings are validated before the report becomes immutable', () async {
+    // The report row cannot be updated or deleted once written, and the
+    // odometer delta is what distance and fuel are reconciled against.
+    await expectLater(store.submitReport(odometerStart: 100, odometerEnd: 40), throwsStateError);
+    await expectLater(store.submitReport(odometerStart: -1, odometerEnd: 10), throwsStateError);
+    await expectLater(store.submitReport(odometerStart: 0, odometerEnd: 99999), throwsStateError);
+    expect(await store.reports(), isEmpty, reason: 'no bad row may be persisted');
+
+    await store.submitReport(driverName: 'Adi', vehicleNumber: 'B 1234 XYZ', odometerStart: 100, odometerEnd: 340);
+    final saved = await store.reports();
+    expect(saved.single.odometerEnd - saved.single.odometerStart, 240);
+  });
+
+  test('report text and json carry the day\'s costs and odometer', () async {
+    await store.addCost('fuel', 150000, 'Pertamina Kuningan', requestId: store.newRequestId());
+    await store.submitReport(driverName: 'Adi', vehicleNumber: 'B 1234 XYZ', odometerStart: 100, odometerEnd: 340);
+
+    final text = await store.reportText(store.today);
+    expect(text, contains('B 1234 XYZ'));
+    expect(text, contains('100 → 340 (240 km)'));
+    expect(text, contains('Pertamina Kuningan'));
+    expect(text, contains('Total: IDR 150000'));
+
+    final json = jsonDecode(await store.reportJson(store.today)) as Map<String, dynamic>;
+    expect(json['odometerEnd'], 340);
+    expect(json['total'], 150000);
+    expect((json['costs'] as List).single['amount'], 150000);
   });
 
   test('arrival, activity, completion require trip and exact sequence', () async {

@@ -52,6 +52,7 @@ class Strings {
     'routeUnavailable': ['Route service unavailable — showing stops only', 'Layanan rute tidak tersedia — hanya menampilkan perhentian', 'บริการเส้นทางไม่พร้อมใช้งาน', '経路サービスを利用できません', '路线服务不可用', 'Hindi available ang route service', 'Dịch vụ định tuyến không khả dụng'],
     'copyText': ['Copy report', 'Salin laporan', 'คัดลอกรายงาน', 'レポートをコピー', '复制报告', 'Kopyahin ang ulat', 'Sao chép báo cáo'],
     'copyJson': ['Copy JSON', 'Salin JSON', 'คัดลอก JSON', 'JSONをコピー', '复制 JSON', 'Kopyahin ang JSON', 'Sao chép JSON'],
+    'share': ['Share report', 'Bagikan laporan', 'แชร์รายงาน', 'レポートを共有', '分享报告', 'Ibahagi ang ulat', 'Chia sẻ báo cáo'],
     'copied': ['Copied to clipboard', 'Tersalin ke papan klip', 'คัดลอกแล้ว', 'コピーしました', '已复制', 'Nakopya na', 'Đã sao chép'],
     'odometerBackwards': ['End odometer is below the start reading', 'Odometer akhir lebih kecil dari awal', 'เลขไมล์สิ้นสุดน้อยกว่าเริ่มต้น', '終了時の距離計が開始時より小さいです', '结束里程小于起始里程', 'Mas mababa ang end odometer kaysa simula', 'Số km cuối nhỏ hơn số km đầu'],
     'odometerNegative': ['Odometer cannot be negative', 'Odometer tidak boleh negatif', 'เลขไมล์ติดลบไม่ได้', '距離計に負の値は使えません', '里程不能为负数', 'Hindi puwedeng negatibo ang odometer', 'Số km không thể âm'],
