@@ -7,7 +7,7 @@ Imported by `docker compose` (`keycloak` service, `--import-realm`).
 | Client ID | Type | Redirect / notes |
 |-----------|------|------------------|
 | `altius-web` | public, PKCE | `http://localhost:3000/callback` (and `127.0.0.1`) |
-| `altius-mobile` | public, PKCE | `com.altius.altius_field:/oauthredirect` |
+| `altius-mobile` | public, PKCE | `com.altius.altiusfield:/oauthredirect` |
 | `altius-api` | bearer-only | Audience target for API JWT `aud` |
 | `altius-integration` | confidential, service accounts | Local M2M template (`client_credentials`); secret in realm JSON for **dev only** |
 

@@ -118,8 +118,17 @@ struct Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RawToolCall {
     id: String,
+    /// OpenAI requires `type: "function"` on every tool_call. Without it the
+    /// field is dropped on round-trip and the *next* upstream call fails with
+    /// `missing_required_parameter: messages[N].tool_calls[M].type`.
+    #[serde(rename = "type", default = "default_tool_call_type")]
+    kind: String,
     #[serde(rename = "function")]
     function: RawFunction,
+}
+
+fn default_tool_call_type() -> String {
+    "function".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

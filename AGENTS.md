@@ -55,7 +55,7 @@ cd apps/mobile && flutter run -t lib/main_dev.dart \
   --dart-define=API_BASE=http://127.0.0.1:8080 \
   --dart-define=KEYCLOAK_ISSUER=http://127.0.0.1:8081/realms/altius \
   --dart-define=KEYCLOAK_CLIENT_ID=altius-mobile \
-  --dart-define=KEYCLOAK_REDIRECT_URI=com.altius.altius_field:/oauthredirect
+  --dart-define=KEYCLOAK_REDIRECT_URI=com.altius.altiusfield:/oauthredirect
 ```
 
 Without dart-defines, `main_dev` keeps the local demo workspace path (no IdP).

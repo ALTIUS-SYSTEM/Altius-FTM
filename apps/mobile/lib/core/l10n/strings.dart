@@ -137,7 +137,7 @@ class Strings {
     'deliveryBody': 'Delivery instructions: confirm the shipment reference with the receiving contact. This demo records three steps only. Photo, signature, barcode and voice evidence are not collected.',
     'authHelp': 'Authentication preview',
     'authHelpBody': 'DEMO ONLY. OTP, cloud authenticator, password recovery and password changes require a real identity provider. No verification codes, emails or password changes are sent. Return to the demo login to continue.',
-    'authHelpLiveBody': 'Sign-in uses Keycloak authorization code + PKCE. Redirect URI must match the AppAuth registration (com.altius.altius_field:/oauthredirect). Tokens are stored in the device keystore/keychain, never in SQLite preferences.',
+    'authHelpLiveBody': 'Sign-in uses Keycloak authorization code + PKCE. Redirect URI must match the AppAuth registration (com.altius.altiusfield:/oauthredirect). Tokens are stored in the device keystore/keychain, never in SQLite preferences.',
     'workspaceBody': 'Workspace labels are demonstration selectors; the four Jakarta fixture stops remain the same in every hub. Unsynced work prevents changing the workspace.',
   };
 }

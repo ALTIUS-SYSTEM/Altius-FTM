@@ -109,8 +109,7 @@
       "publicClient": true,
       "secret": "",
       "redirectUris": [
-        "com.altius.altius_field:/oauthredirect",
-        "com.altius.altius_field://oauthredirect"
+        "com.altius.altiusfield:/oauthredirect"
       ],
       "webOrigins": ["+"],
       "standardFlowEnabled": true,

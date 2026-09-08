@@ -38,7 +38,7 @@
           exported=false — that breaks sign-in. Integrity control is PKCE
           (code_verifier never leaves the app); the filter is scoped to this app's
           scheme and /oauthredirect path only (no host — URI is
-          com.altius.altius_field:/oauthredirect). tools:node=replace prevents the
+          com.altius.altiusfield:/oauthredirect). tools:node=replace prevents the
           AppAuth library manifest from widening this filter.
           nosemgrep: java.android.security.exported_activity.exported_activity
         -->
@@ -53,7 +53,7 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data
-                    android:scheme="com.altius.altius_field"
+                    android:scheme="com.altius.altiusfield"
                     android:path="/oauthredirect"/>
             </intent-filter>
         </activity>

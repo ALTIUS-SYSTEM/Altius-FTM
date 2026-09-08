@@ -64,7 +64,7 @@ class _LoginScreenState extends State<LoginScreen> {
   /// Must match Android/iOS AppAuth redirect registration.
   static const _defaultRedirectUri = String.fromEnvironment(
     'KEYCLOAK_REDIRECT_URI',
-    defaultValue: 'com.altius.altius_field:/oauthredirect',
+    defaultValue: 'com.altius.altiusfield:/oauthredirect',
   );
 
   /// Compile-time IdP + API wiring — when present, Keycloak is the primary path.
@@ -120,7 +120,7 @@ class _LoginScreenState extends State<LoginScreen> {
           const SizedBox(height: 14),
           TextField(controller: _clientId, decoration: const InputDecoration(labelText: 'Client ID', hintText: 'altius-mobile'), onChanged: (_) { cubit.store.saveDraft('clientId', _clientId.text); setState(() {}); }),
           const SizedBox(height: 14),
-          TextField(controller: _redirectUri, decoration: const InputDecoration(labelText: 'Redirect URI', hintText: 'com.altius.altius_field:/oauthredirect'), onChanged: (_) => cubit.store.saveDraft('redirectUri', _redirectUri.text)),
+          TextField(controller: _redirectUri, decoration: const InputDecoration(labelText: 'Redirect URI', hintText: 'com.altius.altiusfield:/oauthredirect'), onChanged: (_) => cubit.store.saveDraft('redirectUri', _redirectUri.text)),
           const SizedBox(height: 10),
         ],
         Align(alignment: Alignment.centerLeft, child: TextButton(
