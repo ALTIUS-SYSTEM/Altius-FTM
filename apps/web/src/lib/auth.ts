@@ -6,6 +6,11 @@
 const STORAGE = {
   verifier: "altius.pkce.verifier",
   state: "altius.pkce.state",
+  /** Set once a silent attempt has been made and not yet succeeded. Stops a
+   *  reload loop when the IdP has no SSO session to hand back. */
+  silentTried: "altius.auth.silent-tried",
+  /** Where the user was when the silent attempt interrupted them. */
+  returnTo: "altius.auth.return-to",
 } as const;
 
 export interface AuthConfig {
@@ -42,8 +47,50 @@ export function clearLoginState() {
   sessionStorage.removeItem(STORAGE.state);
 }
 
-/** Redirect the browser to the Keycloak login page. */
-export async function startLogin(cfg: AuthConfig, redirectUri: string) {
+/**
+ * Silent re-auth bookkeeping.
+ *
+ * Tokens live in memory only, so a reload always starts signed out. Rather than
+ * persist a refresh token where a script could read it, the dashboard asks
+ * Keycloak to re-issue from its own SSO session. `tried` is the loop guard:
+ * once an attempt comes back empty-handed, no further attempt is made until a
+ * real sign-in succeeds.
+ */
+export const silentAuth = {
+  tried: () => {
+    try { return sessionStorage.getItem(STORAGE.silentTried) === "1"; } catch { return true; }
+  },
+  markTried: () => {
+    try { sessionStorage.setItem(STORAGE.silentTried, "1"); } catch { /* storage unavailable */ }
+  },
+  reset: () => {
+    try { sessionStorage.removeItem(STORAGE.silentTried); } catch { /* storage unavailable */ }
+  },
+  rememberReturn: (path: string) => {
+    // Only same-site paths: anything else would make this an open redirect.
+    if (!path.startsWith("/") || path.startsWith("//")) return;
+    try { sessionStorage.setItem(STORAGE.returnTo, path); } catch { /* storage unavailable */ }
+  },
+  takeReturn: (): string | null => {
+    try {
+      const value = sessionStorage.getItem(STORAGE.returnTo);
+      sessionStorage.removeItem(STORAGE.returnTo);
+      return value && value.startsWith("/") && !value.startsWith("//") ? value : null;
+    } catch { return null; }
+  },
+};
+
+/**
+ * Redirect the browser to Keycloak.
+ *
+ * With `prompt: "none"` this is a silent attempt: Keycloak answers immediately
+ * from its own SSO cookie, returning either a code or `error=login_required`,
+ * and never shows a form. A top-level navigation is used rather than a hidden
+ * iframe on purpose — browsers now block third-party cookies in iframes, and
+ * the IdP is a different origin from the dashboard, so the iframe form of this
+ * flow fails for exactly the users it is meant to help.
+ */
+export async function startLogin(cfg: AuthConfig, redirectUri: string, opts?: { prompt?: "none" }) {
   const verifier = randomToken();
   const state = randomToken();
   sessionStorage.setItem(STORAGE.verifier, verifier);
@@ -63,6 +110,7 @@ export async function startLogin(cfg: AuthConfig, redirectUri: string) {
     code_challenge_method: "S256",
     state,
   });
+  if (opts?.prompt === "none") params.set("prompt", "none");
   window.location.assign(`${endpoints(cfg).authorize}?${params}`);
 }
 
@@ -193,6 +241,11 @@ export function logout() {
   tokens = null;
   sessionStorage.removeItem(STORAGE.verifier);
   sessionStorage.removeItem(STORAGE.state);
+  sessionStorage.removeItem(STORAGE.returnTo);
+  // Deliberately marked, not reset: after signing out the SSO session is gone,
+  // so an immediate silent attempt would only add a redirect before the login
+  // form the user is already on their way to.
+  silentAuth.markTried();
 }
 
 /** End the Keycloak SSO session too, so a leaked token cannot be refreshed. */

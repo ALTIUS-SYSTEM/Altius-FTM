@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useDemo } from "@/components/demo-provider";
-import { authConfig, clearLoginState, decodeJwt, finishLogin, type JwtClaims } from "@/lib/auth";
+import { authConfig, clearLoginState, decodeJwt, finishLogin, silentAuth, type JwtClaims } from "@/lib/auth";
 import type { DemoState } from "@/data/model";
 
 const ROLE_MAP: Record<string, DemoState["role"]> = {
@@ -32,9 +32,15 @@ export function Callback() {
   const { update, ready } = useDemo();
   const router = useRouter();
   const [error, setError] = useState("");
+  // The effect consumes the query string and then strips it, so it is not safe
+  // to run twice — and StrictMode runs every effect twice in development. The
+  // second pass would find an empty query and report a missing code over a
+  // sign-in that had in fact already been handled.
+  const handled = useRef(false);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || handled.current) return;
+    handled.current = true;
     const cfg = authConfig();
     if (!cfg) {
       setError("Keycloak is not configured in this build.");
@@ -49,6 +55,14 @@ export function Callback() {
     const oauthError = params.get("error");
     if (oauthError) {
       clearLoginState();
+      // A silent attempt with no SSO session answers with one of these. That is
+      // the expected negative case, not a failure worth showing anyone — send
+      // them to the sign-in form instead of an error banner.
+      if (["login_required", "interaction_required", "consent_required", "account_selection_required"].includes(oauthError)) {
+        silentAuth.markTried();
+        router.replace("/login");
+        return;
+      }
       setError(params.get("error_description") ?? `Sign-in failed: ${oauthError}`);
       return;
     }
@@ -64,7 +78,10 @@ export function Callback() {
         const claims = token ? decodeJwt(token) : {};
         const role = extractRole(claims);
         update((s) => ({ ...s, session: true, role }));
-        router.replace("/dashboard/task");
+        // A successful sign-in means the SSO session is good, so allow silent
+        // restore again on the next reload.
+        silentAuth.reset();
+        router.replace(silentAuth.takeReturn() ?? "/dashboard/task");
       })
       .catch((e: Error) => setError(e.message));
   }, [ready, update, router]);
