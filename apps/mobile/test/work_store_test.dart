@@ -32,6 +32,12 @@ void main() {
       expect(() => parseServerUrl(bad), throwsArgumentError, reason: bad);
     }
     expect(parseServerUrl('  https://api.altius.test  ').host, 'api.altius.test');
+    // Debug builds reach a dev server through `adb reverse`, which is a local
+    // socket. Release builds get no exception — `kDebugMode` is false there.
+    expect(parseServerUrl('http://localhost:8080').host, 'localhost');
+    expect(parseServerUrl('http://10.0.2.2:8080').host, '10.0.2.2');
+    // A non-loopback host over http stays rejected even in debug.
+    expect(() => parseServerUrl('http://api.altius.test'), throwsArgumentError);
     expect(parseServerUrl('http://127.0.0.1:8080').host, '127.0.0.1');
     expect(parseServerUrl('http://localhost:8080').scheme, 'http');
   });

@@ -353,7 +353,10 @@ class WorkStore {
   Future<void> _hydrateAfterLogin(String token) async {
     final base = await _auth.apiBase();
     if (base == null || base.isEmpty) throw StateError('serverError');
-    final client = HttpClient();
+    final client = HttpClient()
+      // Connect-phase timeout: a stalled tunnel must not hang the cubit's
+      // busy flag — the 15s close() timeouts below only cover the response.
+      ..connectionTimeout = const Duration(seconds: 10);
     String? subject;
     String? organization;
     String? hub;

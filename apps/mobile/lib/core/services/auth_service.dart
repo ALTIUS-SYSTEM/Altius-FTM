@@ -94,7 +94,10 @@ class AuthService {
       throw StateError('authConfigMissing');
     }
 
-    final client = HttpClient();
+    final client = HttpClient()
+      // Connect-phase timeout: without it a stalled tunnel (adb reverse down)
+      // hangs postUrl forever and the cubit never leaves state.busy.
+      ..connectionTimeout = const Duration(seconds: 10);
     try {
       final req = await client.postUrl(
         Uri.parse('$issuer/protocol/openid-connect/token'),
