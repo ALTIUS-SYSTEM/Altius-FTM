@@ -1,6 +1,22 @@
-# Local Keycloak realm for Altius FTM
+# Keycloak realms for Altius FTM
 
 Imported by `docker compose` (`keycloak` service, `--import-realm`).
+
+## Realm files
+
+| File | Used by | Users seeded |
+|---|---|---|
+| `deploy/keycloak/altius-realm.json` | `docker-compose.yml` (local) | `admin` / `driver`, password `changeme` |
+| `deploy/keycloak-prod/altius-realm.json` | `docker-compose.prod.yml` (VPS) | **none** — create the first admin in the console |
+
+The production file also sets `sslRequired: all`, drops the `altius-integration`
+dev client and its hard-coded secret, and takes the dashboard redirect URIs from
+`${ALTIUS_WEB_ORIGIN}`, substituted by Keycloak at import time.
+
+Both pin each user's `id`, because Keycloak mints the JWT `sub` from it and
+`DEFAULT_ADMIN_SUB` has to name that `sub` before the realm has ever been
+imported. A username there matches no token and leaves the admin with 403 on
+every business endpoint.
 
 ## Clients
 
@@ -78,7 +94,7 @@ Rotate that secret before any shared environment. OpenAPI documents M2M as `oaut
    - Web Origins: `https://<vercel-app>`
    - Valid post-logout redirect URIs: `https://<vercel-app>`
 4. Admin console is **not** proxied publicly — reach it via `ssh -L 8081:localhost:8081 <vps>` → `http://localhost:8081/admin`.
-5. Persistence: local default is `KC_DB=dev-file` (H2). For production set `KC_DB=postgres` (compose passes `KC_DB_URL`/`KC_DB_USERNAME`/`KC_DB_PASSWORD` pointing at the `postgres` service).
+5. Persistence: Postgres in every environment. Keycloak gets its own `keycloak` database, created on first init by `deploy/postgres/10-keycloak-db.sh`, so its Liquibase migrations never meet the API's refinery migrations. (The former `KC_DB=dev-file` default did not work — the H2 driver rejected the postgres JDBC URL compose passed alongside it — and stored the realm outside any volume.)
 6. For M2M in production: one confidential client per partner + `integration` role; rotate secrets; prefer short-lived client credentials tokens.
 
 Public clients and `altius-integration` include an audience mapper so access tokens carry `aud: altius-api`, matching `KEYCLOAK_AUDIENCE` in compose / backend.

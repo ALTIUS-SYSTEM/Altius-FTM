@@ -22,11 +22,13 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 ## Local stack
 
 ```bash
-docker compose up -d
+docker compose up -d --wait
 ```
 
-- Keycloak: http://localhost:8081
-- PostgreSQL: localhost:5432 (`postgres://altius:altius@localhost:5432/altius`)
+- Keycloak: http://localhost:8081 (health/metrics on :9000, not :8081)
+- PostgreSQL: reachable only on the compose network — the service publishes no
+  host port. Bridge it when you need one (see the header of `pg_it.rs`).
+  Two databases: `altius` (API) and `keycloak` (realm).
 - TypeDB: localhost:1729 (optional, only when `STORE_BACKEND=typedb`)
 - API: http://localhost:8080
 - Web dashboard: http://localhost:3000
@@ -37,6 +39,8 @@ docker compose up -d
 ## Auth E2E (local)
 
 Keycloak imports `deploy/keycloak/altius-realm.json` on compose start (`altius-web`, `altius-mobile`, audience `altius-api`).
+The VPS overlay imports `deploy/keycloak-prod/altius-realm.json` instead, which seeds no users.
+Realm import is first-boot only — once the realm exists, edits to these files do nothing.
 
 **Landing → web handoff:** marketing CTAs link to `{NEXT_PUBLIC_WEB_APP_URL}/login` on `apps/web`. OAuth/PKCE starts only on the web origin (Keycloak redirect URI remains `…/callback` on the web app, not the landing site). Copy `apps/landing/.env.example` → `.env.local` and set `NEXT_PUBLIC_WEB_APP_URL` (default `http://127.0.0.1:3000`).
 

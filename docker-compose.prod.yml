@@ -1,0 +1,82 @@
+# Altius FTM — backend-only VPS overlay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Topology: api + postgres + keycloak + caddy on the VPS. `apps/web` and
+# `apps/landing` are deployed to Vercel and reach this host as an API + IdP
+# origin, so their containers never start here.
+#
+# This is an OVERLAY, not a replacement — docker-compose.yml still supplies the
+# service definitions. The `!override` / `!reset` tags below replace keys
+# outright instead of merging into them (Compose v2.24+), which is the only way
+# to drop an inherited `depends_on` entry or a published port.
+#
+# Everything else comes from .env. See .env.example, and note especially:
+#   ALTIUS_DOMAIN, KEYCLOAK_ISSUER, CORS_ORIGINS, DATABASE_URL, KC_DB.
+
+services:
+  # --- not part of this topology -------------------------------------------
+  # `profiles` keeps them defined (so the overlay stays a pure diff) but out of
+  # every `up` that does not explicitly ask for the profile.
+  web:
+    profiles: ["full-stack"]
+  landing:
+    profiles: ["full-stack"]
+  # Legacy graph backend. STORE_BACKEND=postgres is the default and the
+  # supported production path.
+  typedb:
+    profiles: ["graph"]
+
+  api:
+    # Not published on a public interface: Caddy proxies /api/v3/* over the
+    # compose network. Bound to loopback so `curl localhost:8080` still works
+    # over an SSH tunnel for debugging.
+    ports: !override
+      - "127.0.0.1:8080:8080"
+
+  keycloak:
+    # Storage is already Postgres in the base compose. What changes here is the
+    # run mode and hostname strictness.
+    environment:
+      # With a fixed public hostname, refuse requests arriving under any other
+      # Host header — that is what stops a spoofed Host from rewriting the
+      # issuer and redirect URLs in a discovery response.
+      # `:?` makes a missing domain fail the compose command with this message,
+      # instead of booting Keycloak with KC_HOSTNAME="https://" and failing
+      # later in a way that looks like a Keycloak bug.
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:-https://${ALTIUS_DOMAIN:?set ALTIUS_DOMAIN in .env — docker-compose.prod.yml serves a public hostname over TLS}}
+      KC_HOSTNAME_STRICT: "true"
+      # Substituted into the realm's redirect URIs and web origins at import
+      # time. This is the browser origin of the dashboard — the Vercel domain,
+      # not this host. A mismatch here is the usual cause of "invalid redirect"
+      # on an otherwise correct deployment.
+      ALTIUS_WEB_ORIGIN: ${ALTIUS_WEB_ORIGIN:?set ALTIUS_WEB_ORIGIN in .env — the dashboard origin Keycloak will accept redirects for, e.g. https://app.example.com}
+    # `start-dev` disables TLS enforcement and clustering and is not a
+    # production mode. `start --optimized` needs a pre-built image; plain
+    # `start` builds on boot, which is the right trade for a single host.
+    command:
+      ["start", "--http-port=8081", "--import-realm", "--proxy-headers=xforwarded"]
+    # deploy/keycloak-prod, NOT deploy/keycloak: the dev realm seeds `admin` and
+    # `driver` with the non-temporary password "changeme", which on a public
+    # host is a published admin login. The production realm seeds no users at
+    # all — create the first admin in the console after the first boot.
+    #
+    # IMPORT IS FIRST-BOOT ONLY. Once the realm exists, `--import-realm` skips
+    # it and edits to this file do nothing; change it in the admin console.
+    volumes: !override
+      - ./deploy/keycloak-prod:/opt/keycloak/data/import:ro
+
+  caddy:
+    # Backend-only edge: no /landing route, no web catch-all.
+    volumes: !override
+      - ./Caddyfile.backend:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    # `!override` because depends_on is a map and would otherwise MERGE, so the
+    # inherited web/landing entries would survive and block startup on services
+    # that are not in an active profile.
+    depends_on: !override
+      api:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy

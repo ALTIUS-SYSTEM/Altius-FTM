@@ -10,6 +10,7 @@ Product monorepo for Altius FTM: driver mobile app, operations dashboard, market
 
 | Document | Description |
 |---|---|
+| [ALTIUS_DEPLOYMENT.md](./Docs/ALTIUS_DEPLOYMENT.md) | VPS deploy runbook: `.env`, first boot, first admin, Vercel, failure modes |
 | [Developer portal](./apps/developer-portal) | Public EN/ID guides + Scalar OpenAPI (`pnpm dev:portal` → http://127.0.0.1:3200) |
 | [ALTIUS_BACKEND_ARCHITECTURE.md](./Docs/ALTIUS_BACKEND_ARCHITECTURE.md) | API topology: Keycloak, Postgres, Maps, agent, deploy |
 | [ALTIUS_DATABASE_DESIGN.md](./Docs/ALTIUS_DATABASE_DESIGN.md) | PostgreSQL schema & invariants |
@@ -40,7 +41,8 @@ Product monorepo for Altius FTM: driver mobile app, operations dashboard, market
 ## Local development
 
 ```bash
-docker compose up -d          # Keycloak, Postgres, API, Caddy (optional)
+cp .env.example .env          # optional locally; the compose defaults already work
+docker compose up -d --wait   # Postgres, Keycloak, API, web, landing, Caddy
 
 pnpm install
 cp apps/web/.env.example apps/web/.env.local
@@ -59,11 +61,20 @@ Ports and verification matrix: [AGENTS.md](./AGENTS.md).
 
 ## Deploy shape
 
+Full runbook: [Docs/ALTIUS_DEPLOYMENT.md](./Docs/ALTIUS_DEPLOYMENT.md).
+
+```bash
+./deploy/bootstrap-env.sh ftm.example.com     # .env + secrets, generated on the host
+./deploy/preflight.sh                         # DNS, ports, RAM/swap, .env consistency
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --wait
+./deploy/set-web-origin.sh https://app.example.com   # once the dashboard origin exists
+```
+
 | Tier | Where | Notes |
 |---|---|---|
-| Backend | VPS (Docker Compose + Caddy) | API, Postgres, Keycloak; `ALTIUS_DOMAIN`, `CORS_ORIGINS`, `sslmode=require` when needed |
+| Backend | VPS (Docker Compose + Caddy) | `docker-compose.prod.yml` runs api + postgres + keycloak + caddy only; `ALTIUS_DOMAIN`, `ALTIUS_WEB_ORIGIN`, `CORS_ORIGINS` |
 | Web / landing | Vercel | Build-time `NEXT_PUBLIC_API_BASE` + Keycloak URL / realm / `altius-web` |
-| Mobile | Store builds | `--dart-define` API + Keycloak issuer; redirect `com.altius.altius_field:/oauthredirect` |
+| Mobile | Store builds | `--dart-define` API + Keycloak issuer; redirect `com.altius.altiusfield:/oauthredirect` |
 
 ## License
 

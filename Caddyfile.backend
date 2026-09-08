@@ -1,0 +1,112 @@
+# Altius FTM edge — backend-only VPS deployment.
+#
+# Used with docker-compose.prod.yml, where `web` and `landing` do not run:
+# the dashboard and marketing site are deployed to Vercel and reach this host
+# purely as an API + IdP origin.
+#
+# Differences from the full-stack ./Caddyfile:
+#   - no /landing/* route and no web catch-all (those upstreams do not exist);
+#   - the catch-all returns 404 instead of proxying to a missing container;
+#   - CORS matters here — the browser origin is Vercel, not this domain. The
+#     API sets the CORS headers itself from CORS_ORIGINS; Caddy only forwards.
+#
+# Rate limiting uses github.com/mholt/caddy-ratelimit, which is not in the
+# stock image — the `caddy` service builds it in via Caddy.Dockerfile. Without
+# that build the `rate_limit` directives below fail to parse.
+{
+	admin off
+	servers {
+		# Trust no forwarded client IPs by default; the rate limiter keys on
+		# the peer address, and a spoofable X-Forwarded-For would let one
+		# caller present as many.
+		trusted_proxies static private_ranges
+	}
+	order rate_limit before reverse_proxy
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+}
+
+(routes) {
+	log {
+		output stdout
+		format json
+	}
+
+	# Edge liveness. Answered by Caddy itself, never proxied: a health probe
+	# that depends on an upstream reports the edge as down whenever the app is
+	# merely still starting.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# Auth endpoints are the credential-stuffing surface: tighter bucket.
+	handle /api/v3/auth/* {
+		rate_limit {
+			zone auth {
+				key {remote_host}
+				events 10
+				window 1m
+			}
+		}
+		reverse_proxy api:8080
+	}
+
+	handle /api/v3/* {
+		rate_limit {
+			zone api {
+				key {remote_host}
+				events 120
+				window 1m
+			}
+		}
+		reverse_proxy api:8080
+	}
+
+	# Keycloak: OIDC endpoints + login theme assets. Browsers hit these for the
+	# PKCE redirect from the Vercel-hosted dashboard, so they must be public on
+	# this TLS domain. /admin, /metrics, and /health are deliberately NOT
+	# proxied — reach the admin console via `ssh -L 8081:localhost:8081 <vps>`.
+	handle /realms/* {
+		rate_limit {
+			zone kc {
+				key {remote_host}
+				events 60
+				window 1m
+			}
+		}
+		reverse_proxy keycloak:8081
+	}
+	handle /resources/* {
+		reverse_proxy keycloak:8081
+	}
+
+	# No web/landing upstream in this topology. Answer directly rather than
+	# proxying into a container that is not running — a reverse_proxy to a
+	# missing host yields a confusing 502 that looks like an outage.
+	handle /* {
+		respond "Altius FTM API. See /api/v3/health." 404
+	}
+}
+
+# Bare-IP / pre-DNS access. Keep for the first boot before certificates issue.
+:80 {
+	import routes
+}
+
+# Public deployment. Set ALTIUS_DOMAIN to the public hostname and Caddy
+# provisions TLS for it automatically. The default matches no real Host
+# and its `http://` scheme keeps automatic HTTPS off, so nothing is
+# provisioned. It must never expand to an empty string — an empty site
+# key reads as a global options block and Caddy refuses to load.
+{$ALTIUS_DOMAIN:http://localhost.invalid} {
+	import security_headers
+	import routes
+}
