@@ -31,8 +31,20 @@ export const stateSchema = z.object({
 export type DemoState = z.infer<typeof stateSchema>;
 export const STATUS_LABELS: Record<DemoTaskStatus, string> = { unassigned: "Unassigned", assigned: "Assigned", "in-progress": "In progress", completed: "Completed", failed: "Failed" };
 export const FLOWS = ["Delivery", "Pickup", "House inspection", "Field sales", "Home cleaning", "Field canvassing"];
-export const DRIVERS = ["Adi Pratama", "Nadia Putri", "Rizky Saputra", "Sari Wibowo"];
-export const DEMO_DATE = "2026-09-07";
+/**
+ * Fallback roster for screens not yet backed by the API. Live screens read the
+ * real roster from `/api/v3/users` — assigning a task to a name that is not an
+ * org member is rejected by the API with "assign task".
+ */
+export const DRIVERS: string[] = [];
+
+/** Today, as `YYYY-MM-DD`. A function, not a constant: a workspace left open
+ *  overnight would otherwise keep defaulting new work to the day it loaded. */
+export const today = () => {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+};
 
 export const createEmptyState = (overrides?: Partial<DemoState>): DemoState => ({
   version: 1,

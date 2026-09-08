@@ -111,6 +111,22 @@ export const listUsers = async (): Promise<User[]> => {
   });
 };
 
+/**
+ * Drivers a task can actually be assigned to.
+ *
+ * The API resolves the assignee against org membership and rejects anything
+ * else with "assign task", so a hard-coded roster produces a 400 on save. Falls
+ * back to `display-name` because that is what the task rows carry as assignee.
+ */
+export const listDrivers = async (): Promise<string[]> => {
+  const users = await listUsers();
+  return users
+    .filter(u => u.roles.some(r => r.toLowerCase() === "driver"))
+    .map(u => u.name)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+};
+
 export const ROLES = ["super-admin", "admin", "supervisor", "lead", "driver"] as const;
 
 export const setUserRoles = (subject: string, roles: readonly string[]) =>

@@ -210,6 +210,11 @@ export function endSession(cfg: AuthConfig, redirectUri: string) {
 export interface JwtClaims {
   sub?: string;
   preferred_username?: string;
+  /** Present because the authorize request asks for `profile` and `email`. */
+  name?: string;
+  given_name?: string;
+  family_name?: string;
+  email?: string;
   realm_access?: { roles?: string[] };
   resource_access?: Record<string, { roles?: string[] }>;
 }
