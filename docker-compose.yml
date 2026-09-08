@@ -156,6 +156,21 @@ services:
       # LLM dispatch agent: absent key = agent endpoints refuse.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      # McEasy VSMS/TMS worker: absent key = the worker does not start.
+      # config.rs has always read these, but compose never forwarded them, so
+      # setting MCEASY_API_KEY in .env silently did nothing.
+      MCEASY_API_KEY: ${MCEASY_API_KEY:-}
+      MCEASY_BASE_URL: ${MCEASY_BASE_URL:-https://vsms-v2-public.mceasy.com}
+      MCEASY_POLL_SECONDS: ${MCEASY_POLL_SECONDS:-60}
+      MCEASY_MASTER_SYNC_SECONDS: ${MCEASY_MASTER_SYNC_SECONDS:-3600}
+      MCEASY_RETENTION_HOURS: ${MCEASY_RETENTION_HOURS:-72}
+      # Device-event retention sweep. Same story: read but never forwarded.
+      EVENTS_RETENTION_DAYS: ${EVENTS_RETENTION_DAYS:-90}
+      # FCM v1 push. GOOGLE_APPLICATION_CREDENTIALS is a path INSIDE the
+      # container, so it also needs the service-account JSON bind-mounted —
+      # setting the variable alone leaves push registration refusing.
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
     restart: unless-stopped
     # Docker's json-file driver is unbounded by default: a busy API fills the
     # host disk with logs until every container on it fails. Cap and rotate.
