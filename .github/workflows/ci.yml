@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    # `production` carries the code; `main` holds only LICENSE + README. Watching
+    # main alone meant this workflow had never actually run against the app.
+    branches: [main, production]
+  pull_request:
+    branches: [main, production]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Node / pnpm workspace
+    runs-on: ubuntu-latest
+    steps:
+      # Pin full commit SHAs (Semgrep: github-actions-mutable-action-tag).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --if-present typecheck
+      - run: pnpm -r --if-present lint
+      - run: pnpm -r --if-present test
+      - run: pnpm --filter @altius/web build
+      - run: pnpm --filter @altius/landing build
+      - run: pnpm audit
+
+  backend:
+    name: Rust backend
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: altius
+          POSTGRES_PASSWORD: altius
+          POSTGRES_DB: altius_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U altius -d altius_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://altius:altius@localhost:5432/altius_test
+      STORE_BACKEND: postgres
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          # Required once the action is pinned to a SHA: normally the ref
+          # carries it (`dtolnay/rust-toolchain@stable`), so pinning for supply
+          # chain safety silently dropped the toolchain and this job failed
+          # with "'toolchain' is a required input" before running a test.
+          #
+          # `stable`, not the Dockerfile's pinned 1.90, so a clippy finding
+          # here reproduces on a developer's machine. The release toolchain is
+          # covered anyway: the docker-compose job builds backend/Dockerfile,
+          # which pins rust:1.90-bookworm.
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          workspaces: backend
+      - run: cargo check --workspace --all-targets --all-features
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace
+
+  mobile:
+    name: Flutter mobile
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: subosito/flutter-action@f2c4f6686ca8e8d6e6d0f28410eeef506ed66aff # v2.18.0
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  docker-compose:
+    name: Docker Compose integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+      - run: docker compose up -d --wait
+      - run: docker compose ps
+      - run: curl -f http://localhost:8080/api/v3/ready || exit 1
+      - run: docker compose down

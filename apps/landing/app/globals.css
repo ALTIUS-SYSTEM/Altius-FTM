@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --altius-teal: #00677e;
+  --altius-cyan: #0fb4da;
+  --altius-amber: #e3942c;
+  --altius-surface: #f5fafd;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-white text-neutral-900 antialiased;
+}
+
+.dark body {
+  @apply bg-neutral-950 text-white;
+}

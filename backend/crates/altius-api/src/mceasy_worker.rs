@@ -1,0 +1,497 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+use tokio::sync::watch;
+use tokio::time::interval;
+use uuid::Uuid;
+
+use altius_core::gps::{AnomalyFlag, CompareOpts, GeoSample, compare_gps_streams};
+use altius_core::{
+    Coordinate, DeviceTime, GpsObservation, GpsQuality, GpsReview, GpsReviewClassification,
+    GpsReviewReason, GpsSource,
+};
+
+use crate::error::ApiError;
+use crate::mceasy::{MceasyClient, MceasyDriver, MceasyPosition};
+use crate::store::Store;
+
+pub struct MceasyWorker {
+    pub client: MceasyClient,
+    pub store: Arc<Store>,
+}
+
+impl MceasyWorker {
+    pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
+        let poll = self.client.config().poll_seconds;
+        let sync = self.client.config().master_sync_seconds;
+        let mut poll_tick = interval(Duration::from_secs(poll));
+        let mut sync_tick = interval(Duration::from_secs(sync));
+        // Run a master sync at startup so the first poll has mappings.
+        if let Err(e) = self.sync_all().await {
+            tracing::warn!(error = %e, "mceasy master sync failed");
+        }
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                _ = sync_tick.tick() => {
+                    if let Err(e) = self.sync_all().await {
+                        tracing::warn!(error = %e, "mceasy master sync failed");
+                    }
+                }
+                _ = poll_tick.tick() => {
+                    if let Err(e) = self.poll_all().await {
+                        tracing::warn!(error = %e, "mceasy poll failed");
+                    }
+                }
+            }
+        }
+        tracing::info!("mceasy worker stopped");
+    }
+
+    async fn sync_all(&self) -> anyhow::Result<()> {
+        let orgs = self.store.organizations().await?;
+        for org in orgs {
+            if let Err(e) = self.sync_org(&org).await {
+                tracing::warn!(org, error = %e, "mceasy org sync failed");
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn sync_org(&self, org: &str) -> anyhow::Result<()> {
+        let mceasy_vehicles = self.client.list_vehicles().await?;
+        let mceasy_drivers = self.client.list_drivers().await?;
+
+        let vehicles = self.store.monitoring_vehicles(org).await?;
+        let users = self.store.users_for_org(org).await?;
+
+        // Lowercase keys so McEasy plate casing cannot miss a local fleet match.
+        let by_plate: HashMap<String, _> = vehicles
+            .iter()
+            .filter_map(|v| extract_str(v, "vehicle", "plate").map(|p| (p.to_lowercase(), v)))
+            .collect();
+
+        for mv in mceasy_vehicles {
+            let Some(plate) = mv.license_plate.as_deref() else {
+                continue;
+            };
+            let Some(mceasy_id) = mv.id.as_deref().or(mv.vehicle_id.as_deref()) else {
+                continue;
+            };
+            // UPDATE must use the local plate string (FK / PK casing), not McEasy's.
+            if let Some(local) = by_plate.get(&plate.to_lowercase()) {
+                let local_plate = extract_str(local, "vehicle", "plate").unwrap_or(plate);
+                if let Err(e) = self
+                    .store
+                    .mceasy_sync_vehicle(org, local_plate, mceasy_id)
+                    .await
+                {
+                    tracing::warn!(plate = local_plate, error = %e, "mceasy vehicle sync failed");
+                }
+            } else {
+                tracing::debug!(plate, "mceasy vehicle not matched to local fleet");
+            }
+        }
+
+        for md in mceasy_drivers {
+            if let Some(user_sub) = find_user_for_driver(&md, &users)
+                && let Some(mceasy_id) = md.id.as_deref().or(md.driver_id.as_deref())
+                && let Err(e) = self
+                    .store
+                    .mceasy_sync_driver(org, &user_sub, mceasy_id)
+                    .await
+            {
+                tracing::warn!(user_sub, error = %e, "mceasy driver sync failed");
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn poll_all(&self) -> anyhow::Result<()> {
+        let orgs = self.store.organizations().await?;
+        for org in orgs {
+            if let Err(e) = self.poll_org(&org).await {
+                tracing::warn!(org, error = %e, "mceasy org poll failed");
+            }
+        }
+        // Prune old observations after each global poll.
+        let retention = self.client.config().retention_hours;
+        let boundary = Utc::now() - chrono::Duration::hours(retention as i64);
+        if let Err(e) = self.store.prune_gps_observations_older_than(boundary).await {
+            tracing::warn!(error = %e, "mceasy prune failed");
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn poll_org(&self, org: &str) -> anyhow::Result<()> {
+        let vehicles = self.store.monitoring_vehicles(org).await?;
+        // Keys are lowercased: `sync_org` matches plates case-insensitively,
+        // and McEasy's `license_plate` casing is not guaranteed to equal ours.
+        let mut by_plate: HashMap<String, (String, Option<String>)> = HashMap::new();
+        for v in &vehicles {
+            let plate = extract_str(v, "vehicle", "plate").unwrap_or_default();
+            let mceasy_id = extract_str(v, "vehicle", "mceasy_vehicle_id")
+                .or_else(|| extract_str(v, "vehicle", "mceasy-vehicle-id"));
+            if let Some(mid) = mceasy_id {
+                let hub_id = extract_str(v, "hub", "id")
+                    .or_else(|| extract_str(v, "hub", "hub-id"))
+                    .unwrap_or_default();
+                by_plate.insert(
+                    plate.to_lowercase(),
+                    (hub_id.to_string(), Some(mid.to_string())),
+                );
+            }
+        }
+
+        // McEasy driver ids are not Keycloak subjects; the master sync stores
+        // the mapping on `users.mceasy_driver_id`. Without it, app samples
+        // (keyed by user_sub) never pair with vehicle positions.
+        let users = self.store.users_for_org(org).await?;
+        let driver_to_sub: HashMap<String, String> = users
+            .iter()
+            .filter_map(|u| {
+                let user = u.get("user")?;
+                let mceasy_id = user
+                    .get("mceasy_driver_id")
+                    .or_else(|| user.get("mceasy-driver-id"))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())?;
+                let sub = user
+                    .get("sub")
+                    .or_else(|| user.get("user-sub"))
+                    .and_then(Value::as_str)?;
+                Some((mceasy_id.to_string(), sub.to_string()))
+            })
+            .collect();
+
+        if by_plate.is_empty() {
+            return Ok(());
+        }
+
+        // Prefer batch live view when we have Mceasy vehicle ids.
+        let plates: Vec<&str> = by_plate.keys().map(|s| s.as_str()).collect();
+        let vehicle_ids: Vec<&str> = by_plate
+            .values()
+            .filter_map(|(_, mid)| mid.as_deref())
+            .collect();
+
+        let positions = if !vehicle_ids.is_empty() {
+            match self.client.create_temp_live_view(&plates).await {
+                Ok(view_id) => {
+                    self.client
+                        .get_temp_live_view(&view_id, &vehicle_ids)
+                        .await?
+                }
+                Err(_) => {
+                    // Fallback to per-vehicle last position.
+                    fetch_positions_individually(&self.client, &vehicle_ids).await?
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Fetch app observations for this org from the last 15 minutes.
+        let since = Utc::now() - chrono::Duration::minutes(15);
+        let app_obs = self
+            .store
+            .gps_observations_for_org(org, Some("app_gps"), Some(since))
+            .await?;
+        let app_samples = observations_to_samples(&app_obs)?;
+
+        for pos in positions {
+            let Some(plate) = pos
+                .license_plate
+                .as_deref()
+                .map(|p| p.to_lowercase())
+                .or_else(|| {
+                    by_plate
+                        .iter()
+                        .find(|(_, (_, mid))| mid.as_deref() == pos.vehicle_id.as_deref())
+                        .map(|(p, _)| p.clone())
+                })
+            else {
+                continue;
+            };
+            let Some((hub_id, _)) = by_plate.get(&plate) else {
+                continue;
+            };
+
+            // Resolve the McEasy driver id to the local user_sub so it pairs
+            // with app observations; fall back to the raw id when unmapped.
+            let mceasy_driver = pos
+                .driver_id
+                .clone()
+                .or(pos.driver_name.clone())
+                .unwrap_or_default();
+            let driver_id = driver_to_sub
+                .get(&mceasy_driver)
+                .cloned()
+                .unwrap_or(mceasy_driver);
+            let recorded_at = pos.recorded_at.unwrap_or_else(Utc::now);
+
+            let vehicle_obs_id = Uuid::new_v4().to_string();
+            let obs = GpsObservation {
+                id: vehicle_obs_id.clone(),
+                tenant_id: org.to_string(),
+                hub_id: hub_id.clone(),
+                driver_id: driver_id.clone(),
+                vehicle_id: Some(plate.to_string()),
+                time: DeviceTime {
+                    utc: recorded_at,
+                    offset_minutes: 0,
+                },
+                source: GpsSource::VehicleGps,
+                quality: if pos.latitude.is_some() && pos.longitude.is_some() {
+                    GpsQuality::Accurate
+                } else {
+                    GpsQuality::Unavailable
+                },
+                location: pos
+                    .latitude
+                    .and_then(|lat| pos.longitude.map(|lng| Coordinate { lat, lng })),
+                accuracy_meters: None,
+                speed_mps: pos.speed,
+                mock_location_reported: None,
+            };
+
+            if let Err(e) = self.store.record_gps_observation(&obs).await {
+                tracing::warn!(plate, error = %e, "record vehicle gps observation failed");
+                continue;
+            }
+
+            // Compare this vehicle sample with the app samples for the same driver.
+            let vehicle_samples = vec![GeoSample {
+                lat: pos.latitude.unwrap_or(f64::NAN),
+                lng: pos.longitude.unwrap_or(f64::NAN),
+                at: recorded_at.timestamp_millis() as f64,
+                accuracy_meters: None,
+            }];
+            let app_for_driver: Vec<&ParsedObservation> = app_samples
+                .iter()
+                .filter(|s| s.driver_id == driver_id)
+                .collect();
+            let app_geo: Vec<GeoSample> = app_for_driver
+                .iter()
+                .map(|s| GeoSample {
+                    lat: s.coord.lat,
+                    lng: s.coord.lng,
+                    at: s.at_ms as f64,
+                    accuracy_meters: s.accuracy,
+                })
+                .collect();
+
+            let result = compare_gps_streams(
+                &app_geo,
+                &vehicle_samples,
+                CompareOpts {
+                    max_time_gap_ms: 60_000.0,
+                    threshold_meters: 150.0,
+                },
+            );
+
+            // The review cites the app observation closest in time to the
+            // vehicle fix — not the vehicle observation itself, which is what
+            // `vehicle_observation_id` is for.
+            let app_observation_id = app_for_driver
+                .iter()
+                .min_by(|a, b| {
+                    (a.at_ms - recorded_at.timestamp_millis())
+                        .abs()
+                        .cmp(&(b.at_ms - recorded_at.timestamp_millis()).abs())
+                })
+                .map(|s| s.id.clone())
+                .unwrap_or_default();
+
+            let review = GpsReview {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: org.to_string(),
+                hub_id: hub_id.clone(),
+                driver_id: driver_id.clone(),
+                vehicle_id: Some(plate.to_string()),
+                app_observation_id,
+                vehicle_observation_id: Some(vehicle_obs_id),
+                classification: match result.flag {
+                    AnomalyFlag::None => GpsReviewClassification::Consistent,
+                    AnomalyFlag::Review => GpsReviewClassification::ReviewRequired,
+                    AnomalyFlag::InsufficientData => GpsReviewClassification::InsufficientData,
+                },
+                separation_meters: if result.variance_meters > 0 {
+                    Some(result.variance_meters as f64)
+                } else {
+                    None
+                },
+                time_delta_seconds: None,
+                reason: if app_for_driver.is_empty() {
+                    GpsReviewReason::MissingPair
+                } else {
+                    GpsReviewReason::Separation
+                },
+                reviewed_by: None,
+                created_at: Utc::now(),
+            };
+
+            if let Err(e) = self.store.record_gps_review(&review).await {
+                tracing::warn!(plate, error = %e, "record gps review failed");
+            }
+        }
+
+        Ok(())
+    }
+}
+
+struct ParsedObservation {
+    id: String,
+    driver_id: String,
+    coord: Coordinate,
+    at_ms: i64,
+    accuracy: Option<f64>,
+}
+
+fn observations_to_samples(obs: &[Value]) -> anyhow::Result<Vec<ParsedObservation>> {
+    let mut out = Vec::new();
+    for o in obs {
+        let obs = o
+            .get("observation")
+            .ok_or_else(|| anyhow::anyhow!("missing observation"))?;
+        // Postgres `row_to_json` uses snake_case; TypeDB fetch uses kebab attributes.
+        let lat = obs
+            .get("lat")
+            .or_else(|| obs.get("latitude"))
+            .and_then(Value::as_f64);
+        let lng = obs
+            .get("lng")
+            .or_else(|| obs.get("longitude"))
+            .and_then(Value::as_f64);
+        let (lat, lng) = match (lat, lng) {
+            (Some(lat), Some(lng)) => (lat, lng),
+            _ => continue,
+        };
+        let at = obs
+            .get("recorded_at")
+            .or_else(|| obs.get("recorded-at-utc"))
+            .and_then(|v| match v {
+                Value::String(s) => DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|d| d.with_timezone(&Utc)),
+                _ => None,
+            });
+        let at_ms = at.map(|d| d.timestamp_millis()).unwrap_or(0);
+        out.push(ParsedObservation {
+            id: obs
+                .get("id")
+                .or_else(|| obs.get("observation-id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            driver_id: obs
+                .get("driver_sub")
+                .or_else(|| obs.get("user-sub"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            coord: Coordinate { lat, lng },
+            at_ms,
+            accuracy: obs
+                .get("accuracy_meters")
+                .or_else(|| obs.get("accuracy-meters"))
+                .and_then(Value::as_f64),
+        });
+    }
+    Ok(out)
+}
+
+async fn fetch_positions_individually(
+    client: &MceasyClient,
+    vehicle_ids: &[&str],
+) -> Result<Vec<MceasyPosition>, ApiError> {
+    let mut out = Vec::new();
+    for &id in vehicle_ids {
+        match client.vehicle_last_position(id).await {
+            Ok(p) => out.push(p),
+            Err(_) => continue,
+        }
+    }
+    Ok(out)
+}
+
+fn find_user_for_driver(md: &MceasyDriver, users: &[Value]) -> Option<String> {
+    let target_name = md.name.as_deref().unwrap_or("").to_lowercase();
+    let target_email = md.email.as_deref().unwrap_or("").to_lowercase();
+    for u in users {
+        let user = u.get("user")?;
+        let name = user
+            .get("display_name")
+            .or_else(|| user.get("display-name"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_lowercase();
+        let email = user
+            .get("email")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_lowercase();
+        let sub = user
+            .get("sub")
+            .or_else(|| user.get("user-sub"))
+            .and_then(Value::as_str)?;
+        if !target_name.is_empty() && name == target_name {
+            return Some(sub.to_string());
+        }
+        if !target_email.is_empty() && email == target_email {
+            return Some(sub.to_string());
+        }
+    }
+    None
+}
+
+fn extract_str<'a>(v: &'a Value, outer: &str, inner: &str) -> Option<&'a str> {
+    v.get(outer)?.get(inner)?.as_str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn observations_to_samples_reads_postgres_row_to_json() {
+        let rows = vec![json!({
+            "observation": {
+                "id": "app-1",
+                "driver_sub": "sub-driver",
+                "lat": -6.2,
+                "lng": 106.8,
+                "accuracy_meters": 12.0,
+                "recorded_at": "2026-09-08T10:00:00+00:00"
+            }
+        })];
+        let samples = observations_to_samples(&rows).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].id, "app-1");
+        assert_eq!(samples[0].driver_id, "sub-driver");
+        assert!((samples[0].coord.lat - (-6.2)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn observations_to_samples_reads_typedb_kebab_attrs() {
+        let rows = vec![json!({
+            "observation": {
+                "observation-id": "app-2",
+                "user-sub": "sub-2",
+                "latitude": -6.3,
+                "longitude": 106.9,
+                "accuracy-meters": 5.0,
+                "recorded-at-utc": "2026-09-08T11:00:00.000+00:00"
+            }
+        })];
+        let samples = observations_to_samples(&rows).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].id, "app-2");
+        assert_eq!(samples[0].driver_id, "sub-2");
+    }
+}

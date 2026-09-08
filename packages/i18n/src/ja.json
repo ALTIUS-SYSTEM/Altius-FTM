@@ -1,0 +1,6 @@
+{
+  "app.name": "Altius Field", "nav.dashboard": "ダッシュボード", "nav.tasks": "タスク", "nav.route": "ルート", "nav.lhs": "運転日報", "nav.anomaly": "GPS確認", "nav.settings": "設定", "nav.history": "履歴", "nav.signOut": "ログアウト",
+  "driver.arrive": "到着を報告", "driver.start": "作業開始", "driver.complete": "完了を報告", "driver.depart": "出発を報告", "driver.nextStop": "次の地点", "driver.navigate": "ナビ開始", "driver.checkIn": "出勤", "driver.checkOut": "退勤", "driver.addExpense": "経費を追加",
+  "status.pending": "待機中", "status.arrived": "到着済み", "status.inProgress": "作業中", "status.completed": "完了", "status.departed": "出発済み", "status.offline": "オフライン", "status.queued": "同期待ち", "status.synced": "同期済み",
+  "route.planned": "計画ルート", "route.actual": "記録された軌跡", "route.eta": "到着予定時刻", "route.ata": "到着報告時刻", "route.demo": "デモ用グラフ — 道路経路ではありません", "gps.insufficient": "GPSデータが不足しています", "gps.review": "要確認。不正の証拠ではありません", "lhs.submit": "日報を提出", "lhs.approve": "承認", "lhs.requestRevision": "修正を依頼", "common.save": "保存", "common.cancel": "キャンセル", "common.retry": "再試行"
+}

@@ -1,0 +1,48 @@
+---
+title: Keamanan
+description: Di mana data berada, ekspektasi TLS, dan cara melaporkan kerentanan.
+order: 8
+---
+
+## Lokasi data
+
+| Penyimpanan | Isi tipikal |
+|---|---|
+| **Basis data API** (Postgres) | Tugas, keanggotaan org/hub, peristiwa perangkat diterima, laporan |
+| **SQLite aplikasi seluler** | Working set tugas, outbox GPS/peristiwa, PII operasional hingga disinkronkan / dibersihkan |
+| **Penyimpanan aman perangkat** | Token akses / refresh OAuth |
+| **Rahasia hanya di server** | Penyedia peta, kunci LLM — tidak pernah dikirim dalam bundel seluler atau web |
+
+Telepon hilang atau tidak terkunci dengan aplikasi pengemudi harus diperlakukan sebagai potensi paparan data lapangan operasional.
+
+## Keamanan transport
+
+- API dan dasbor produksi memakai **TLS** (HTTPS).
+- Utamakan koneksi basis data dengan `sslmode=require` di luar jaringan privat.
+- CORS API diizinkan hanya untuk origin web yang dikenal.
+
+## Identitas
+
+- Keycloak OIDC dengan PKCE untuk web dan seluler.
+- API mengotorisasi dengan Bearer JWT; cakupan tenant berasal dari keanggotaan sisi server.
+
+## Melaporkan kerentanan
+
+Kirim laporan keamanan ke maintainer melalui saluran privat untuk keterlibatan Anda (**jangan** membuka isu publik dengan detail eksploitasi).
+
+Sertakan:
+
+- Komponen dan versi / lingkungan yang terdampak
+- Langkah reproduksi
+- Dampak (kerahasiaan, integritas, ketersediaan)
+- Apakah perbaikan sudah diketahui
+
+Kami bertujuan mengakui dalam **5 hari kerja**.
+
+Untuk dukungan pelanggan, gunakan alamat yang ditentukan kontrak Anda atau tautan dukungan di footer portal (dikonfigurasi lewat `NEXT_PUBLIC_SUPPORT_EMAIL`).
+
+## Terkait
+
+- [Autentikasi API](/id/guides/api-authentication)
+- [Sinkronisasi & data](/id/guides/sync-and-data)
+- [Pemecahan masalah](/id/guides/troubleshooting)

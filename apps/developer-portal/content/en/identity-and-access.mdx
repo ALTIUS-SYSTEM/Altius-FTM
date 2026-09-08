@@ -1,0 +1,46 @@
+---
+title: Identity and access
+description: Roles, organizations, hubs, and SSO with Keycloak — customer-facing.
+order: 3
+---
+
+## Identity provider
+
+Altius uses **Keycloak** (OpenID Connect). Users sign in with authorization code + PKCE:
+
+| Client | Platform |
+|---|---|
+| `altius-web` | Web dashboard (public, PKCE) |
+| `altius-mobile` | Field app (public, PKCE) |
+
+Access tokens are **JWTs**. The API expects:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+There is **no** first-class “generate API key” control in the product UI. Machine-to-machine credentials, when required, are arranged as a separate IdP client with your Altius team.
+
+## Roles
+
+Typical realm roles (exact labels may match your tenant):
+
+| Role | Typical use |
+|---|---|
+| Admin | Org-wide configuration and user management |
+| Supervisor | Oversight across hubs / teams |
+| Lead | Day-to-day dispatch and assignment |
+| Driver | Field execution on mobile |
+
+Users without a recognized fleet role cannot call protected API routes.
+
+## Organization and hub
+
+- **Organization** — business tenant; data is isolated per org.
+- **Hub** — physical site / warehouse context (geofence, local work).
+
+Membership is resolved **server-side** from the signed-in user. Clients must not rely on a self-asserted `tenant_id` for authorization.
+
+## Password grant
+
+Some environments can expose a password grant login endpoint for trusted private tools. It stays **disabled** in production-style hosts. Prefer PKCE for people and coordinated IdP clients for systems.

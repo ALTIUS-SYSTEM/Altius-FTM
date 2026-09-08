@@ -1,0 +1,26 @@
+.desloppify/
+.claude/
+.agents/
+node_modules/
+.next/
+out/
+coverage/
+playwright-report/
+test-results/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+*.iml
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.DS_Store
+apps/mobile/android/local.properties
+apps/mobile/ios/Pods/
+apps/mobile/ios/.symlinks/
+target/
+
+# Local-only dumps / binary artifacts (never commit)
+extraction/

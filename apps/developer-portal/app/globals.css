@@ -1,0 +1,111 @@
+@import "tailwindcss";
+@import "@altius/design-tokens/tailwind.css";
+
+@source "../../packages/design-tokens/src";
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-background text-on-background antialiased;
+  font-family: var(--font-body);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-heading);
+}
+
+/* Scalar light theme mapped to Altius tokens */
+.scalar-app {
+  --scalar-color-1: #171c1f;
+  --scalar-color-2: #3d494d;
+  --scalar-color-3: #6d797e;
+  --scalar-color-accent: #00677e;
+  --scalar-background-1: #f5fafd;
+  --scalar-background-2: #eff4f8;
+  --scalar-background-3: #e9eff2;
+  --scalar-border-color: #bcc8ce;
+  --scalar-button-1: #00677e;
+  --scalar-button-1-color: #ffffff;
+  --scalar-button-1-hover: #005565;
+  --scalar-color-green: #537d8c;
+  --scalar-color-red: #ba1a1a;
+  --scalar-color-orange: #e99931;
+  --scalar-color-blue: #0fb4da;
+  --scalar-font: "Public Sans", system-ui, sans-serif;
+  --scalar-font-code: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.prose-docs {
+  @apply max-w-3xl text-body-lg text-on-surface;
+}
+
+.prose-docs h1 {
+  @apply mb-4 text-headline-lg text-on-surface;
+}
+
+.prose-docs h2 {
+  @apply mb-3 mt-10 scroll-mt-24 text-headline-md text-on-surface;
+}
+
+.prose-docs h3 {
+  @apply mb-2 mt-8 scroll-mt-24 text-headline-sm text-on-surface;
+}
+
+.prose-docs p {
+  @apply mb-4 text-on-surface-variant leading-relaxed;
+}
+
+.prose-docs ul,
+.prose-docs ol {
+  @apply mb-4 ml-5 space-y-2 text-on-surface-variant;
+}
+
+.prose-docs ul {
+  list-style: disc;
+}
+
+.prose-docs ol {
+  list-style: decimal;
+}
+
+.prose-docs a {
+  @apply text-primary underline-offset-2 hover:underline;
+}
+
+.prose-docs code {
+  @apply rounded bg-surface-container px-1.5 py-0.5 font-mono text-mono-data text-on-surface;
+}
+
+.prose-docs pre {
+  @apply mb-4 overflow-x-auto rounded-lg border border-outline-variant bg-surface-container-low p-4;
+}
+
+.prose-docs pre code {
+  @apply bg-transparent p-0;
+}
+
+.prose-docs table {
+  @apply mb-6 w-full border-collapse text-body-md;
+}
+
+.prose-docs th,
+.prose-docs td {
+  @apply border border-outline-variant px-3 py-2 text-left;
+}
+
+.prose-docs th {
+  @apply bg-surface-container-low font-semibold text-on-surface;
+}
+
+.prose-docs blockquote {
+  @apply mb-4 border-l-4 border-primary pl-4 text-on-surface-variant;
+}
+
+.prose-docs hr {
+  @apply my-8 border-outline-variant;
+}

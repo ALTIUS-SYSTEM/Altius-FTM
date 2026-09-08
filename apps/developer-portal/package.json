@@ -1,0 +1,35 @@
+{
+  "name": "@altius/developer-portal",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "sync:openapi": "node ./scripts/sync-openapi.mjs",
+    "predev": "pnpm sync:openapi",
+    "dev": "next dev --hostname 127.0.0.1 -p 3200",
+    "prebuild": "pnpm sync:openapi",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 -p 3200",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@altius/design-tokens": "workspace:*",
+    "@fontsource/geist": "5.2.6",
+    "@fontsource/public-sans": "5.2.6",
+    "@scalar/api-reference-react": "0.9.66",
+    "gray-matter": "4.0.3",
+    "lucide-react": "1.38.0",
+    "motion": "12.43.0",
+    "next": "15.5.24",
+    "next-mdx-remote": "6.0.0",
+    "react": "19.1.9",
+    "react-dom": "19.1.9"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "22.18.0",
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.9",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.2"
+  }
+}

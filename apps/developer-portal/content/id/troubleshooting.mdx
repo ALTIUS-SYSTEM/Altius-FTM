@@ -1,0 +1,37 @@
+---
+title: Pemecahan masalah
+description: Masalah umum login, sync, dan peta untuk IT dan pemimpin lapangan.
+order: 9
+---
+
+## Login gagal (web atau seluler)
+
+| Gejala | Yang dicek |
+|---|---|
+| Loop pengalihan / “invalid redirect” | URL callback web terdaftar di Keycloak; skema seluler `com.altius.altiusfield:/oauthredirect` |
+| Realm / klien salah | Konfirmasikan `altius-web` / `altius-mobile` dan URL issuer untuk lingkungan ini |
+| Pengguna terautentikasi tetapi ruang kerja kosong | Keanggotaan org / hub hilang — minta admin memberikan akses |
+| Clock skew | Waktu perangkat atau server jauh dari waktu nyata dapat merusak JWT `exp` / `nbf` |
+
+## Sync macet di seluler
+
+1. Pastikan perangkat memiliki akses jaringan ke host API.
+2. Keluar / masuk hanya setelah memeriksa apakah outbox sedang mengunggah (hindari menghapus data di tengah sync tanpa panduan).
+3. Untuk integrator yang memeriksa tanda terima: cocokkan berdasarkan **id peristiwa**, bukan urutan array — lihat [Sinkronisasi & data](/id/guides/sync-and-data).
+4. Jika satu peristiwa ditolak berulang, tangkap `message` kesalahan API dan hubungi dukungan dengan `event_id`.
+
+## Peta kosong atau usang
+
+Tile / peta statis **diproksi oleh backend**. Klien tidak pernah menyematkan kunci penyedia.
+
+- Jika peta gagal untuk semua orang, anggap sebagai gangguan API / penyedia peta.
+- Jika hanya satu peramban gagal, hard-refresh dan periksa inspeksi TLS perusahaan terhadap host API.
+
+## API 401 / 403
+
+- **401** — token Bearer hilang / kedaluwarsa / tidak valid; refresh lewat OIDC.
+- **403** — terautentikasi tetapi tidak diizinkan untuk org/hub/aksi tersebut; perbaiki keanggotaan atau peran.
+
+## Masih macet?
+
+Hubungi dukungan Altius (alamat di footer portal atau kontrak Anda) dengan nama lingkungan, perkiraan waktu, id pengguna (bukan kata sandi), dan cuplikan layar pesan kesalahan (tanpa token).

@@ -1,0 +1,1070 @@
+openapi: 3.0.3
+info:
+  title: Altius FTM API
+  description: |
+    HTTP API for **Altius Field Task Manager** (Fleet & Transport Management).
+
+    **Audience:** web (`apps/web`), mobile (`apps/mobile`), and server integrators.
+
+    **Base path:** `/api/v3`
+
+    **Auth (production):** Keycloak OIDC — send `Authorization: Bearer <access_token>`
+    (RS256). Human clients: `altius-web` (PKCE), `altius-mobile` (PKCE + refresh).
+    Machine clients: confidential client + `client_credentials` (see
+    `oauth2ClientCredentials`) with realm role `integration`.
+
+    **Wire format:** JSON with **snake_case** field names as implemented by
+    `backend/crates/altius-core` (Rust). `DeviceEvent` / `DeviceTime` /
+    `Coordinate` also **deserialize** camelCase / contract aliases
+    (`eventId`, `occurredAtUtc`, `actorId`, `latitude`, …). Responses stay
+    snake_case.
+
+    **Tenant scope:** `org_id` / hub for writes come from the JWT subject
+    membership in Postgres — never trust body-supplied tenant alone.
+
+    Broader / planned surface: [ALTIUS_API_REFERENCE.md](../ALTIUS_API_REFERENCE.md).
+  version: 0.1.0
+  contact:
+    name: PT Antero Daemon Technologies
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+
+servers:
+  - url: http://127.0.0.1:8080/api/v3
+    description: Local docker-compose API
+  - url: https://api.altius.example/api/v3
+    description: Production (replace with your VPS / Caddy host)
+
+tags:
+  - name: System
+  - name: Auth
+  - name: Tasks
+  - name: Sync
+  - name: Routing
+  - name: Roster
+  - name: Reports
+  - name: Monitoring
+  - name: Notify
+  - name: Agent
+  - name: Integrations
+
+security:
+  - bearerAuth: []
+  - oauth2ClientCredentials: []
+
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Liveness probe
+      security: []
+      operationId: getHealth
+      responses:
+        '200':
+          description: Process is up
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /ready:
+    get:
+      tags: [System]
+      summary: Readiness probe
+      security: []
+      operationId: getReady
+      responses:
+        '200':
+          description: Persistence ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: altius-api }
+                  ready: { type: boolean, example: true }
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Resource-owner password grant (optional)
+      description: |
+        Disabled unless `ALLOW_PASSWORD_GRANT=true`. Prefer Keycloak PKCE for
+        browsers and mobile.
+      security: []
+      operationId: authLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Token payload from Keycloak
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      security: []
+      operationId: authRefresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: New token payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current principal
+      operationId: authMe
+      responses:
+        '200':
+          description: Subject, roles, org/hub
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      subject: { type: string }
+                      roles:
+                        type: array
+                        items:
+                          type: string
+                          enum:
+                            [
+                              superadmin,
+                              admin,
+                              supervisor,
+                              lead,
+                              driver,
+                              integration,
+                            ]
+                      organization: { type: string }
+                      hub: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /tasks:
+    get:
+      tags: [Tasks]
+      summary: List tasks for the caller's organization
+      description: |
+        Staff and `integration` service accounts see the full org board.
+        Drivers receive only tasks assigned to their subject.
+      operationId: listTasks
+      responses:
+        '200':
+          description: Task documents (task + stops)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TaskDocument'
+                  meta:
+                    type: object
+                    properties:
+                      mode: { type: string, example: live }
+                      organization: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /task/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [Tasks]
+      summary: Get one task
+      description: |
+        Drivers may fetch only their own assignments. Staff and `integration`
+        may fetch any task in the org.
+      operationId: getTask
+      responses:
+        '200':
+          description: Task document
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/TaskDocument'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      tags: [Tasks]
+      summary: Update task (staff)
+      description: Path `id` must match body `id`. `tenant_id` is overwritten from JWT org.
+      operationId: updateTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Task'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskIdResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Tasks]
+      summary: Delete task (staff)
+      description: |
+        Soft-blocked while `in_progress` (409). Cascades assignments and
+        stops for the task row. Requires staff roles — not `integration`.
+      operationId: deleteTask
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      deleted: { type: string }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /task-create:
+    post:
+      tags: [Tasks]
+      summary: Create task (staff)
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Task'
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskIdResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /events:
+    post:
+      tags: [Sync]
+      summary: Sync device event outbox (driver)
+      description: |
+        Body is a JSON **array** of 1–500 `DeviceEvent` objects.
+        Each event's `tenant_id` / `hub_id` must match the driver's membership.
+        `action: skip` requires a non-empty `reason`.
+        Receipts are returned in the same order and include `event_id` for
+        client matching (never match by array index alone).
+        CamelCase aliases (`eventId`, `actorId`, …) are accepted on input.
+      operationId: syncEvents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              minItems: 1
+              maxItems: 500
+              items:
+                $ref: '#/components/schemas/DeviceEvent'
+      responses:
+        '200':
+          description: Per-event receipts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EventReceipt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /route/optimize:
+    post:
+      tags: [Routing]
+      summary: Optimize waypoint order
+      operationId: optimizeRoute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [origin, waypoints]
+              properties:
+                origin:
+                  $ref: '#/components/schemas/Coordinate'
+                waypoints:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Coordinate'
+      responses:
+        '200':
+          description: Optimized order / legs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: object, additionalProperties: true }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /route/eta:
+    post:
+      tags: [Routing]
+      summary: ETA via Directions or schematic fallback
+      operationId: routeEta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: ETA payload (`maps` may be `live` or `demo`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: object, additionalProperties: true }
+
+  /route/geocode:
+    post:
+      tags: [Routing]
+      summary: Geocode address
+      operationId: routeGeocode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Coordinate result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: object, additionalProperties: true }
+
+  /route/static-map:
+    post:
+      tags: [Routing]
+      summary: Server-proxied static map
+      operationId: routeStaticMap
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Map image or URL payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: object, additionalProperties: true }
+
+  /places/autocomplete:
+    post:
+      tags: [Routing]
+      summary: Place autocomplete
+      operationId: placesAutocomplete
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Suggestions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: object, additionalProperties: true }
+
+  /users:
+    get:
+      tags: [Roster]
+      summary: List users
+      operationId: listUsers
+      responses:
+        '200':
+          description: Users in org
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { type: object, additionalProperties: true } }
+    post:
+      tags: [Roster]
+      summary: Create user account (admin)
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Created
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /drivers:
+    get:
+      tags: [Roster]
+      summary: List drivers
+      operationId: listDrivers
+      responses:
+        '200':
+          description: Driver roster
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { type: object, additionalProperties: true } }
+
+  /hubs:
+    get:
+      tags: [Roster]
+      summary: List hubs
+      operationId: listHubs
+      responses:
+        '200':
+          description: Hubs for org
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { type: object, additionalProperties: true } }
+
+  /hubs-create:
+    post:
+      tags: [Roster]
+      summary: Create hub
+      operationId: createHub
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Created
+
+  /reports:
+    get:
+      tags: [Reports]
+      summary: List daily reports (LHS)
+      description: |
+        Drivers see their own reports. Staff and `integration` see the org set.
+      operationId: listReports
+      responses:
+        '200':
+          description: Reports
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { type: object, additionalProperties: true } }
+    post:
+      tags: [Reports]
+      summary: Submit daily report
+      description: |
+        Driver submit. Server forces `status=submitted` and `revision=0`;
+        body status/revision are ignored.
+      operationId: recordReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Accepted
+
+  /reports/{driver}/{day}:
+    parameters:
+      - name: driver
+        in: path
+        required: true
+        schema: { type: string }
+      - name: day
+        in: path
+        required: true
+        schema: { type: string, format: date }
+        description: Calendar day `YYYY-MM-DD`
+    patch:
+      tags: [Reports]
+      summary: Review daily report (staff)
+      description: |
+        Transition a submitted report to `approved` or `revision_requested`.
+        `revision_requested` requires a non-empty `note`.
+      operationId: reviewReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision:
+                  type: string
+                  enum: [approved, revision_requested]
+                note:
+                  type: string
+                  description: Required when decision is `revision_requested`
+      responses:
+        '200':
+          description: Reviewed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      driver: { type: string }
+                      day: { type: string }
+                      decision: { type: string }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /integrations:
+    get:
+      tags: [Integrations]
+      summary: List org integration service accounts (admin)
+      operationId: listIntegrations
+      responses:
+        '200':
+          description: Bound M2M subjects
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { type: object, additionalProperties: true } }
+                  meta:
+                    type: object
+                    properties:
+                      organization: { type: string }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Integrations]
+      summary: Bind Keycloak service-account subject to org (admin)
+      description: |
+        Does **not** create the Keycloak client. Create the confidential client
+        and `integration` role out-of-band, then POST the service-account `sub`
+        here to attach org (and optional hub) membership in Postgres.
+      operationId: provisionIntegration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, display_name]
+              properties:
+                subject: { type: string, minLength: 1, maxLength: 128 }
+                display_name: { type: string }
+                hub_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Provisioned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      subject: { type: string }
+                      organization: { type: string }
+                      hub: { type: string, nullable: true }
+                      role: { type: string, example: integration }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /integrations/{sub}:
+    parameters:
+      - name: sub
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [Integrations]
+      summary: Remove integration org binding (admin)
+      operationId: deprovisionIntegration
+      responses:
+        '200':
+          description: Removed
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /costs:
+    get:
+      tags: [Reports]
+      summary: List cost entries
+      operationId: listCosts
+      responses:
+        '200':
+          description: Costs
+    post:
+      tags: [Reports]
+      summary: Record cost
+      operationId: recordCost
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Accepted
+
+  /monitoring/vehicles:
+    get:
+      tags: [Monitoring]
+      summary: List monitored vehicles
+      operationId: listMonitoringVehicles
+      responses:
+        '200':
+          description: Vehicles
+
+  /monitoring/reviews:
+    get:
+      tags: [Monitoring]
+      summary: List GPS anomaly reviews
+      operationId: listGpsReviews
+      responses:
+        '200':
+          description: Reviews
+
+  /agent/dispatch-suggestion:
+    post:
+      tags: [Agent]
+      summary: Start dispatch suggestion loop (staff)
+      operationId: agentDispatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Suggestion or awaiting_approval
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
+  /agent/resume:
+    post:
+      tags: [Agent]
+      summary: Approve or reject paused agent tool call
+      operationId: agentResume
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Continued loop result
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Keycloak access token (RS256) from authorization-code + PKCE
+        (`altius-web` / `altius-mobile`) or any Bearer JWT with a known realm
+        role. Prefer this scheme in interactive clients.
+    oauth2ClientCredentials:
+      type: oauth2
+      description: |
+        Machine-to-machine. Mint a token via Keycloak
+        `grant_type=client_credentials` on a confidential client, then send
+        `Authorization: Bearer <access_token>`.
+
+        The service account (or client roles mapped into the access token)
+        must include realm role **`integration`**. That role gates org-scoped
+        **read** routes (for example full `GET /tasks`); write routes still
+        require staff (`admin` / `supervisor` / `lead` / `super-admin`).
+
+        Local realm import does not yet ship a sample integrator client —
+        create one in the admin console (see `deploy/keycloak/README.md`).
+      flows:
+        clientCredentials:
+          tokenUrl: http://127.0.0.1:8081/realms/altius/protocol/openid-connect/token
+          scopes: {}
+
+  parameters:
+    TaskId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+
+  responses:
+    BadRequest:
+      description: Invalid input
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Unauthorized:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Forbidden:
+      description: Authenticated but not allowed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    NotFound:
+      description: Resource not found in tenant
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Conflict:
+      description: Conflict (duplicate key, etc.)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Unavailable:
+      description: Dependency unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+
+  schemas:
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: integer
+              description: HTTP status code echoed in the body
+              example: 400
+            message:
+              type: string
+              example: bad request
+
+    HealthResponse:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+        service: { type: string, example: altius-api }
+        persistence: { type: boolean }
+        maps: { type: boolean }
+        agent: { type: boolean }
+
+    TokenResponse:
+      type: object
+      additionalProperties: true
+      description: Keycloak token JSON (`access_token`, `refresh_token`, `expires_in`, …)
+
+    Coordinate:
+      type: object
+      description: Canonical `lat` / `lng`; accepts `latitude` / `longitude` on input.
+      required: [lat, lng]
+      properties:
+        lat: { type: number, format: double, minimum: -90, maximum: 90 }
+        lng: { type: number, format: double, minimum: -180, maximum: 180 }
+
+    DeviceTime:
+      type: object
+      description: |
+        Canonical `utc` / `offset_minutes`. Accepts `occurredAtUtc`,
+        `offsetMinutes`, `utcOffsetMinutes` on input.
+      required: [utc, offset_minutes]
+      properties:
+        utc: { type: string, format: date-time }
+        offset_minutes:
+          type: integer
+          minimum: -840
+          maximum: 840
+
+    StopStatus:
+      type: string
+      enum: [pending, arrived, working, completed, departed, skipped]
+
+    TaskStatus:
+      type: string
+      enum: [unassigned, assigned, in_progress, completed, cancelled]
+
+    StopAction:
+      type: string
+      enum: [arrive, start_activity, complete_activity, depart, skip]
+
+    Stop:
+      type: object
+      required: [id, sequence, name, address, location, status, service_seconds]
+      properties:
+        id: { type: string }
+        sequence: { type: integer, minimum: 0 }
+        name: { type: string }
+        address: { type: string }
+        location:
+          $ref: '#/components/schemas/Coordinate'
+        status:
+          $ref: '#/components/schemas/StopStatus'
+        service_seconds: { type: integer, minimum: 0 }
+
+    Task:
+      type: object
+      required: [id, tenant_id, hub_id, title, status, stops, created_at]
+      properties:
+        id: { type: string }
+        tenant_id: { type: string, description: Overwritten from JWT org on write }
+        hub_id: { type: string }
+        title: { type: string }
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        assignee_id:
+          type: string
+          nullable: true
+        stops:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Stop'
+        created_at: { type: string, format: date-time }
+
+    TaskDocument:
+      description: Store/list projection may nest task and stops
+      type: object
+      additionalProperties: true
+
+    TaskIdResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            taskId: { type: string }
+
+    DeviceEvent:
+      type: object
+      description: |
+        Canonical wire names are snake_case. Deserialization also accepts
+        camelCase / contract aliases: `eventId`, `idempotencyKey`, `tenantId`,
+        `hubId`, `driverId` / `actorId`, `deviceId`, `taskId`, `stopId`,
+        `accuracyMeters`, `schemaVersion`, `deviceSequence`,
+        `expectedTaskRevision`, `observationId`. Inside `time`: `occurredAtUtc`
+        → `utc`, `offsetMinutes` / `utcOffsetMinutes` → `offset_minutes`.
+        Inside `location`: `latitude` / `longitude` → `lat` / `lng`.
+      required:
+        - event_id
+        - idempotency_key
+        - tenant_id
+        - hub_id
+        - driver_id
+        - device_id
+        - task_id
+        - action
+        - time
+        - payload
+      properties:
+        event_id: { type: string }
+        idempotency_key: { type: string }
+        tenant_id: { type: string }
+        hub_id: { type: string }
+        driver_id:
+          type: string
+          description: Canonical; alias `actorId` accepted on input
+        device_id: { type: string }
+        task_id: { type: string }
+        stop_id:
+          type: string
+          nullable: true
+          description: If null, server resolves the first active stop
+        action:
+          $ref: '#/components/schemas/StopAction'
+        time:
+          $ref: '#/components/schemas/DeviceTime'
+        location:
+          $ref: '#/components/schemas/Coordinate'
+        accuracy_meters:
+          type: number
+          format: double
+          minimum: 0
+        schema_version:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Contract schema version the device claims (optional)
+        device_sequence:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Monotonic per-device outbox sequence (optional)
+        expected_task_revision:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Task revision the device believed was current (optional)
+        reason:
+          type: string
+          nullable: true
+          description: Required non-empty when `action` is `skip`
+        observation_id:
+          type: string
+          nullable: true
+          description: Optional link to a known GPS observation
+        payload:
+          type: object
+          additionalProperties: true
+
+    EventReceipt:
+      oneOf:
+        - type: object
+          required: [status, event_id, server_event_id]
+          properties:
+            status: { type: string, enum: [accepted] }
+            event_id: { type: string }
+            server_event_id: { type: string }
+        - type: object
+          required: [status, event_id, reason]
+          properties:
+            status: { type: string, enum: [conflict] }
+            event_id: { type: string }
+            reason: { type: string }
+        - type: object
+          required: [status, event_id, reason]
+          properties:
+            status: { type: string, enum: [rejected] }
+            event_id: { type: string }
+            reason: { type: string }
+        - type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [queued, sending] }

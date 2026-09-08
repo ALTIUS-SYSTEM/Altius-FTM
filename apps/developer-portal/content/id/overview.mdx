@@ -1,0 +1,34 @@
+---
+title: Ringkasan
+description: Apa itu Altius FTM — web, seluler, dan API untuk operasi lapangan.
+order: 1
+---
+
+**Altius Field Task Manager (FTM)** mengoordinasikan pekerjaan armada dan transportasi melalui tiga permukaan:
+
+| Permukaan | Pengguna | Peran |
+|---|---|---|
+| **Dasbor web** | Dispatcher, supervisor, admin | Membuat tugas, memantau rute, meninjau laporan |
+| **Aplikasi lapangan** | Pengemudi | Menerima pekerjaan, tetap bekerja offline, sinkron saat online |
+| **HTTP API** (`/api/v3`) | Integrator & klien pihak pertama | Akses JSON terautentikasi ke tugas, sync, roster, dan lainnya |
+
+## Tujuan produk
+
+- Menugaskan dan mengurutkan tugas lapangan dengan konteks hub / gudang yang jelas.
+- Melacak kemajuan dengan sinyal GPS dan geofence tanpa menyematkan rahasia peta di aplikasi klien.
+- Menjaga perangkat pengemudi tetap berguna offline; merekonsiliasi dengan server memakai tanda terima peristiwa yang andal.
+- Mengisolasi data penyewa berdasarkan keanggotaan organisasi dan hub dari token identitas.
+
+## Untuk siapa portal ini
+
+Situs ini untuk **IT pelanggan** dan **integrator**: pengetahuan produk, ekspektasi identitas, dan penggunaan API. Bukan buku panduan rekayasa internal.
+
+## Langkah berikutnya
+
+1. [Mulai cepat](/id/guides/getting-started) — jaringan dan login pertama
+2. [Identitas & akses](/id/guides/identity-and-access) — peran dan SSO
+3. [Autentikasi API](/id/guides/api-authentication) — Bearer JWT dan [referensi API](/id/api)
+
+<Tip>
+Gunakan sakelar bahasa (EN / ID) di header; setiap panduan tersedia dalam kedua bahasa.
+</Tip>

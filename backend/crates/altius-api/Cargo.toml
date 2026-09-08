@@ -1,0 +1,35 @@
+[package]
+name = "altius-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+altius-core = { path = "../altius-core" }
+altius-schema = { path = "../altius-schema" }
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+jsonwebtoken.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tower-http.workspace = true
+typedb-driver.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+futures.workspace = true
+anyhow.workspace = true
+gcp_auth.workspace = true
+prometheus.workspace = true
+tokio-postgres.workspace = true
+deadpool-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+rustls.workspace = true
+postgres-types.workspace = true
+refinery.workspace = true
+urlencoding = "2.1.3"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

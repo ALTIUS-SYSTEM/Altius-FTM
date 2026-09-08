@@ -1,0 +1,311 @@
+# Altius FTM canonical schema — TypeQL 3.0
+# Entities + relations mirroring packages/api-contracts Zod schemas.
+
+define
+
+# ---------- attributes ----------
+attribute org-id        value string;
+attribute hub-id        value string;
+attribute user-sub      value string;
+attribute display-name  value string;
+attribute role-name     value string;
+attribute task-id       value string;
+attribute stop-id       value string;
+attribute title         value string;
+attribute address       value string;
+attribute latitude      value double;
+attribute longitude     value double;
+attribute sequence      value integer;
+attribute stage         value string;
+attribute event-id      value string;
+attribute request-key   value string;
+attribute action        value string;
+attribute occurred-utc  value datetime-tz;
+attribute offset-min    value integer @range(-840..840);
+attribute day           value string;
+attribute payload       value string;
+attribute category      value string;
+attribute amount-minor  value integer;
+attribute currency      value string @regex("^[A-Z]{3}$");
+attribute note          value string;
+attribute report-status value string;
+attribute revision      value integer;
+attribute plate         value string;
+attribute team-id       value string;
+attribute driver-name   value string;
+attribute accuracy-meters  value double;
+attribute source           value string;
+attribute shift         value string;
+attribute fcm-token     value string;
+attribute device-id     value string;
+
+# McEasy + GPS monitoring attributes
+attribute mceasy-vehicle-id value string;
+attribute mceasy-driver-id  value string;
+attribute mceasy-last-seen  value datetime;
+attribute mceasy-ignition   value boolean;
+attribute observation-id    value string;
+attribute recorded-at-utc   value datetime;
+attribute quality           value string;
+attribute speed-mps         value double;
+attribute mock-reported     value boolean;
+attribute review-id          value string;
+attribute app-observation-id value string;
+attribute vehicle-observation-id value string;
+attribute reviewed-by        value string;
+attribute classification     value string;
+attribute review-reason      value string;
+attribute separation-meters  value double;
+attribute time-delta-seconds value double;
+
+# ---------- entities ----------
+entity organization
+    owns org-id @key,
+    owns display-name;
+
+entity hub
+    owns hub-id @key,
+    owns display-name,
+    owns latitude,
+    owns longitude;
+
+entity user
+    owns user-sub @key,
+    owns display-name,
+    # Denormalised copy of the Keycloak realm role, kept so rosters can be
+    # filtered in one query. NOT an authorization source: the API authorizes on
+    # the role claim in the bearer token, and this is only ever a cache that
+    # provisioning and role changes refresh.
+    owns role-name,
+    owns mceasy-driver-id;
+
+entity task
+    owns task-id @key,
+    owns title,
+    owns stage,
+    owns day;
+
+entity stop
+    owns stop-id @key,
+    owns task-id,
+    owns sequence,
+    owns display-name,
+    owns address,
+    owns latitude,
+    owns longitude,
+    owns stage;
+
+entity device-event
+    owns event-id @key,
+    owns request-key @unique,
+    owns action,
+    owns occurred-utc,
+    owns offset-min,
+    owns day,
+    owns payload;
+
+entity cost-entry
+    owns event-id @key,
+    owns category,
+    owns amount-minor,
+    owns currency,
+    owns note,
+    owns day,
+    owns user-sub;
+
+entity daily-report
+    owns day,
+    owns report-status,
+    owns revision,
+    owns payload;
+
+attribute vehicle-check-id  value string;
+attribute vehicle-condition value string;
+attribute license-plate     value string;
+attribute vehicle-type      value string;
+attribute km-start          value integer;
+attribute km-end            value integer;
+attribute check-notes       value string;
+attribute service-date      value string;
+attribute kir-date          value string;
+attribute stnk-date         value string;
+attribute payload           value string;
+
+entity vehicle-check
+    owns vehicle-check-id @key,
+    owns day,
+    owns driver-name,
+    owns license-plate,
+    owns vehicle-type,
+    owns km-start,
+    owns km-end,
+    owns vehicle-condition,
+    owns check-notes,
+    owns service-date,
+    owns kir-date,
+    owns stnk-date,
+    owns user-sub,
+    owns payload;
+
+entity vehicle
+    owns plate @key,
+    owns display-name,
+    owns mceasy-vehicle-id,
+    owns mceasy-last-seen,
+    owns mceasy-ignition;
+
+entity device
+    owns device-id @key,
+    owns fcm-token;
+
+# GPS observation — either from the driver's app or from a vehicle telematics
+# unit (e.g. Mceasy VSMS). Observations are immutable and time-bounded.
+entity gps-observation
+    owns observation-id @key,
+    owns org-id,
+    owns hub-id,
+    owns user-sub,
+    owns plate,
+    owns source,
+    owns quality,
+    owns latitude,
+    owns longitude,
+    owns accuracy-meters,
+    owns speed-mps,
+    owns mock-reported,
+    owns recorded-at-utc,
+    owns day;
+
+# Comparison result between an app and a vehicle observation. Stored so
+# super-admin dashboards can list and review mismatches.
+entity gps-review
+    owns review-id @key,
+    owns org-id,
+    owns hub-id,
+    owns user-sub,
+    owns plate,
+    owns app-observation-id,
+    owns vehicle-observation-id,
+    owns classification,
+    owns separation-meters,
+    owns time-delta-seconds,
+    owns review-reason,
+    owns reviewed-by,
+    owns recorded-at-utc,
+    owns day;
+
+# A named group of drivers within one hub — the unit a supervisor rosters.
+entity team
+    owns team-id @key,
+    owns display-name,
+    owns shift;
+
+# ---------- relations ----------
+# `owns` is a reserved TypeQL keyword — naming the relation that made the whole
+# schema fail to parse, so every store query failed at runtime.
+relation registered
+    relates owner,
+    relates asset;
+entity user plays registered:owner;
+entity device plays registered:asset;
+relation membership
+    relates member,
+    relates org;
+entity user        plays membership:member;
+entity organization plays membership:org;
+
+relation hub-assignment
+    relates member,
+    relates hub;
+entity user plays hub-assignment:member;
+entity hub  plays hub-assignment:hub;
+
+relation dispatch
+    relates task,
+    relates driver;
+entity task plays dispatch:task;
+entity user plays dispatch:driver;
+
+relation contains
+    relates parent,
+    relates child;
+entity task plays contains:parent;
+entity stop plays contains:child;
+
+relation reports
+    relates stop,
+    relates event;
+entity stop         plays reports:stop;
+entity device-event plays reports:event;
+
+relation recorded
+    relates event,
+    relates task;
+entity device-event plays recorded:event;
+entity task         plays recorded:task;
+
+relation submitted
+    relates report,
+    relates driver;
+entity daily-report plays submitted:report;
+entity user         plays submitted:driver;
+
+relation expensed
+    relates report,
+    relates entry;
+entity daily-report plays expensed:report;
+entity cost-entry   plays expensed:entry;
+
+relation operates
+    relates hub,
+    relates vehicle;
+entity hub     plays operates:hub;
+entity vehicle plays operates:vehicle;
+
+relation crewing
+    relates team,
+    relates member;
+entity team plays crewing:team;
+entity user plays crewing:member;
+
+# A team belongs to exactly one hub, and the hub to one org — so team scope is
+# derivable from the same allocation chain every other query already walks.
+relation stationed
+    relates team,
+    relates hub;
+entity team plays stationed:team;
+entity hub  plays stationed:hub;
+
+relation allocation
+    relates org,
+    relates hub;
+entity organization plays allocation:org;
+entity hub          plays allocation:hub;
+
+relation located
+    relates task,
+    relates hub;
+entity task plays located:task;
+entity hub  plays located:hub;
+
+relation inspected
+    relates check,
+    relates driver;
+entity vehicle-check plays inspected:check;
+entity user          plays inspected:driver;
+
+relation observed
+    relates driver,
+    relates vehicle,
+    relates observation;
+entity user           plays observed:driver;
+entity vehicle        plays observed:vehicle;
+entity gps-observation plays observed:observation;
+
+relation reviewed
+    relates review,
+    relates driver,
+    relates vehicle;
+entity gps-review plays reviewed:review;
+entity user       plays reviewed:driver;
+entity vehicle    plays reviewed:vehicle;

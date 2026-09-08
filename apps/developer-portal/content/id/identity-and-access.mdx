@@ -1,0 +1,51 @@
+---
+title: Identitas dan akses
+description: Peran, cakupan organisasi dan hub, SSO melalui Keycloak.
+order: 3
+---
+
+Altius memisahkan **siapa Anda** (identitas) dari **apa yang boleh Anda lakukan di penyewa mana** (keanggotaan).
+
+## Penyedia identitas
+
+Masuk produksi memakai **Keycloak** (OpenID Connect):
+
+- Klien web: `altius-web` (authorization code + PKCE)
+- Klien seluler: `altius-mobile` (authorization code + PKCE, dengan refresh)
+
+Pengguna mengautentikasi di IdP; dasbor dan aplikasi seluler menerima access token dan memanggil API dengan `Authorization: Bearer …`.
+
+<Tip>
+Password grant terhadap API bukan jalur produksi. Utamakan alur OIDC peramban atau native. Lihat [Autentikasi API](/id/guides/api-authentication).
+</Tip>
+
+## Organisasi dan hub
+
+| Konsep | Arti |
+|---|---|
+| **Organisasi** | Penyewa bisnis — batas data utama |
+| **Hub** | Konteks gudang / lokasi di dalam org (geofence dan roster sering terikat di sini) |
+
+Keanggotaan org dan hub diselesaikan **di sisi server** dari subjek yang terautentikasi. Klien tidak boleh memperlakukan tenant id dari body sebagai otorisasi.
+
+## Peran (tampak pelanggan)
+
+Nama peran tepat dapat berbeda per penerapan. Pola umum:
+
+| Peran | Akses tipikal |
+|---|---|
+| Admin | Konfigurasi org, undangan pengguna, visibilitas luas |
+| Supervisor / lead | Dispatch, pemantauan, laporan untuk hub yang ditugaskan |
+| Pengemudi | Pekerjaan lapangan seluler untuk tugas yang ditugaskan |
+
+Minta operator Anda untuk matriks peran yang diterapkan di realm Anda.
+
+## Ekspektasi SSO
+
+- Staf dan pengemudi memakai realm yang sama kecuali kontrak menentukan lain.
+- MFA dan kebijakan kata sandi dikonfigurasi di Keycloak oleh operator.
+- Masa sesi dan perilaku refresh mengikuti pengaturan IdP dan klien.
+
+## Offboarding
+
+Nonaktifkan atau hapus pengguna Keycloak (dan keanggotaan org) saat seseorang keluar. Mencabut akses IdP adalah kontrol utama; data lokal di perangkat mungkin tetap ada sampai perangkat di-wipe atau aplikasi membersihkan penyimpanan.

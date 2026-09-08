@@ -1,0 +1,6 @@
+{
+  "app.name": "Altius Field", "nav.dashboard": "Bảng điều khiển", "nav.tasks": "Nhiệm vụ", "nav.route": "Tuyến đường", "nav.lhs": "Báo cáo ngày của tài xế", "nav.anomaly": "Kiểm tra GPS", "nav.settings": "Cài đặt", "nav.history": "Lịch sử", "nav.signOut": "Đăng xuất",
+  "driver.arrive": "Báo đã đến", "driver.start": "Bắt đầu công việc", "driver.complete": "Báo hoàn thành", "driver.depart": "Báo rời đi", "driver.nextStop": "Điểm tiếp theo", "driver.navigate": "Dẫn đường", "driver.checkIn": "Chấm công vào", "driver.checkOut": "Chấm công ra", "driver.addExpense": "Thêm chi phí",
+  "status.pending": "Đang chờ", "status.arrived": "Đã đến", "status.inProgress": "Đang thực hiện", "status.completed": "Hoàn thành", "status.departed": "Đã rời đi", "status.offline": "Ngoại tuyến", "status.queued": "Chờ đồng bộ", "status.synced": "Đã đồng bộ",
+  "route.planned": "Tuyến dự kiến", "route.actual": "Lộ trình đã ghi", "route.eta": "Giờ đến dự kiến", "route.ata": "Giờ báo đến", "route.demo": "Đồ thị minh họa — không phải định tuyến đường bộ", "gps.insufficient": "Không đủ dữ liệu GPS", "gps.review": "Cần kiểm tra, không phải bằng chứng gian lận", "lhs.submit": "Gửi báo cáo", "lhs.approve": "Phê duyệt", "lhs.requestRevision": "Yêu cầu chỉnh sửa", "common.save": "Lưu", "common.cancel": "Hủy", "common.retry": "Thử lại"
+}

@@ -1,0 +1,58 @@
+---
+title: Autentikasi API
+description: Bearer JWT, klien OIDC, dan cara memakai referensi API interaktif.
+order: 7
+---
+
+HTTP API Altius berada di bawah **`/api/v3`**. Dokumentasi interaktif: [Referensi API](/id/api).
+
+## Memanggil API
+
+```http
+Authorization: Bearer <access_token>
+Content-Type: application/json
+```
+
+Token adalah **JWT RS256** yang diterbitkan Keycloak. API memvalidasi issuer, audience, dan masa berlaku.
+
+## Klien resmi
+
+| Client id | Permukaan | Alur |
+|---|---|---|
+| `altius-web` | Dasbor web | Authorization code + PKCE |
+| `altius-mobile` | Aplikasi pengemudi | Authorization code + PKCE (+ refresh) |
+
+Integrator harus memperoleh token melalui alur OIDC yang disetujui untuk lingkungannya — berkoordinasi dengan Altius jika Anda memerlukan klien rahasia khusus.
+
+## Hidrasi opsional
+
+```http
+GET /api/v3/auth/me
+Authorization: Bearer <access_token>
+```
+
+Mengembalikan profil terautentikasi dan konteks keanggotaan yang dipakai aplikasi pihak pertama.
+
+## Coba di Scalar
+
+[Referensi API](/id/api) dapat mengirim permintaan langsung ke server yang tercantum di dokumen OpenAPI (atau `NEXT_PUBLIC_API_BASE` jika dikonfigurasi).
+
+1. Masuk lewat dasbor atau klien OIDC Anda dan salin **access token**.
+2. Di Scalar, otorisasi dengan `Bearer <token>`.
+3. Panggil operasi yang diinginkan.
+
+<Warning>
+**Jangan** mengandalkan password grant (`POST /api/v3/auth/login`) untuk produksi. Jalur itu dinonaktifkan kecuali operator secara eksplisit mengaktifkannya untuk lab. Utamakan PKCE Keycloak di peramban / native.
+</Warning>
+
+## Konvensi (singkat)
+
+| Topik | Aturan |
+|---|---|
+| Versioning | Prefiks `/api/v3` |
+| Nama JSON wire | **snake_case** |
+| Kesalahan | `{ "error": { "code": …, "message": "…" } }` |
+| Tenant | Dari keanggotaan JWT — bukan dari body saja |
+| Tanda terima sync | Cocokkan berdasarkan `event_id` / `server_event_id` |
+
+Berkas OpenAPI di portal ini: `/openapi/altius-ftm-v3.openapi.yaml` (salinan sumber repo di `Docs/openapi/` — sinkronkan ulang saat sumber berubah).

@@ -1,0 +1,29 @@
+---
+title: Overview
+description: What Altius FTM is and which surfaces your IT team and integrators use.
+order: 1
+---
+
+Altius **Field Task Manager (FTM)** coordinates fleet and field transport work across three surfaces:
+
+| Surface | Who uses it | Purpose |
+|---|---|---|
+| **Web dashboard** | Admins, supervisors, leads | Create and assign work, monitor hubs, review progress |
+| **Mobile field app** | Drivers / field staff | Execute stops offline-first, sync when online |
+| **HTTP API** (`/api/v3`) | Apps and integrations | Tasks, events, hubs — authenticated with Bearer JWT |
+
+## What this portal covers
+
+- Product setup for **customer IT** (identity, clients, troubleshooting)
+- Integrator conventions and the interactive **API reference**
+
+This site is **public documentation**. Signing in happens on the operations dashboard (Keycloak), not on this portal.
+
+## What you will not find here
+
+- Monorepo engineering internals
+- A dashboard “Create API key” button — Altius API access uses **OIDC access tokens**, not long-lived product API keys
+
+<Tip>
+Start with [Getting started](/en/guides/getting-started), then [Identity & access](/en/guides/identity-and-access).
+</Tip>

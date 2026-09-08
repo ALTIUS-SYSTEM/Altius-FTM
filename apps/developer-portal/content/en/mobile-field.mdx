@@ -1,0 +1,35 @@
+---
+title: Mobile field app
+description: Driver app, offline-first work, and OAuth redirect scheme.
+order: 5
+---
+
+The Altius field app is built for drivers who often work with intermittent connectivity.
+
+## Offline-first
+
+- Task and stop state can live on-device.
+- Operational events queue locally and upload when the network returns.
+- Tokens are stored in the platform secure store — not in plain preferences tables.
+
+## Sign-in
+
+- OIDC with PKCE against Keycloak client `altius-mobile`.
+- Redirect URI: `com.altius.altiusfield:/oauthredirect` (and related app-link variants as deployed).
+
+## Field workflow (summary)
+
+1. Sign in and sync the task list.
+2. Navigate stops (arrive, work, complete / skip as allowed).
+3. Capture required evidence your org configured.
+4. Sync — confirm receipts before discarding local queue items.
+
+## IT checklist
+
+- Correct API base and issuer in the build or managed config
+- Allow the custom URL scheme / intent filters required for OAuth return
+- MDM policies that do not block secure storage or background sync where required
+
+<Warning>
+Do not distribute builds that embed third-party Maps or LLM API keys. Those stay server-side.
+</Warning>

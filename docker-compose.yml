@@ -1,0 +1,295 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    # Imports deploy/keycloak/altius-realm.json on first start (realm altius +
+    # public PKCE clients altius-web / altius-mobile with aud=altius-api).
+    command: ["start-dev", "--http-port=8081", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Postgres, not H2, in every environment.
+      #
+      # `dev-file` was the old default, and it was broken two ways: KC_DB_URL
+      # still resolved to a postgres JDBC URL (the `-` fallback substitutes on
+      # unset, so it was never actually absent) and the H2 driver rejected it,
+      # so the container never became healthy and `api`/`caddy` never started.
+      # H2 also wrote to /opt/keycloak/data, which is not a volume — every
+      # realm change vanished on container recreation.
+      #
+      # Keycloak gets its OWN database (deploy/postgres/10-keycloak-db.sh) so
+      # its Liquibase migrations never meet the API's refinery migrations.
+      KC_DB: ${KC_DB:-postgres}
+      KC_DB_URL: ${KC_DB_URL:-jdbc:postgresql://postgres:5432/${KC_POSTGRES_DB:-keycloak}}
+      KC_DB_USERNAME: ${KC_DB_USERNAME:-${POSTGRES_USER:-altius}}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:-${POSTGRES_PASSWORD:-altius}}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      # Caddy terminates TLS, so Keycloak must trust X-Forwarded-* to emit
+      # https:// issuer + redirect URLs. Direct hits on :8081 send no
+      # forwarded headers and keep working over plain http for local dev.
+      KC_PROXY_HEADERS: ${KC_PROXY_HEADERS:-xforwarded}
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./deploy/keycloak:/opt/keycloak/data/import:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    # localhost-only: local browsers hit it for PKCE; on a VPS all public
+    # traffic goes through Caddy /realms/* and the admin console is reached
+    # via SSH tunnel — never exposed on a public interface in cleartext.
+    ports:
+      - "127.0.0.1:8081:8081"
+    healthcheck:
+      # Port 9000, not 8081: Keycloak 25+ serves /health/* on the separate
+      # management interface. Probing 8081 returns 404, so the container never
+      # went healthy and `api` + `caddy` never started behind it.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  typedb:
+    image: typedb/typedb:3.12.3
+    volumes:
+      - typedb-data:/var/lib/typedb/data
+    # Not published: only `api` talks to TypeDB, over the compose network.
+    expose:
+      - "1729"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/1729"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-altius}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-altius}
+      POSTGRES_DB: ${POSTGRES_DB:-altius}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # First-init only: creates the `keycloak` database alongside `altius`.
+      - ./deploy/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-altius} -d ${POSTGRES_DB:-altius}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    # localhost-only on 5433: a Homebrew postgres already owns 127.0.0.1:5432,
+    # so host-run processes (cargo run, psql) reach compose Postgres here.
+    ports:
+      - "127.0.0.1:5433:5432"
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      BIND: 0.0.0.0:8080
+      STORE_BACKEND: ${STORE_BACKEND:-postgres}
+      # Cleartext on the compose network. Production managed Postgres:
+      # DATABASE_URL=...?sslmode=require (see backend/.env.example).
+      DATABASE_URL: ${DATABASE_URL:-postgres://altius:altius@postgres:5432/altius?sslmode=disable}
+      TYPEDB_ADDRESS: ${TYPEDB_ADDRESS:-typedb:1729}
+      TYPEDB_USERNAME: ${TYPEDB_USERNAME:-admin}
+      TYPEDB_PASSWORD: ${TYPEDB_PASSWORD:-password}
+      TYPEDB_DATABASE: ${TYPEDB_DATABASE:-altius}
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8081/realms/altius}
+      KEYCLOAK_JWKS_URL: ${KEYCLOAK_JWKS_URL:-http://keycloak:8081/realms/altius/protocol/openid-connect/certs}
+      KEYCLOAK_TOKEN_URL: ${KEYCLOAK_TOKEN_URL:-http://keycloak:8081/realms/altius/protocol/openid-connect/token}
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-altius-api}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-altius-api}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      AGENT_STATE_SECRET: ${AGENT_STATE_SECRET}
+      # Must match apps/web PKCE redirect (`${origin}/callback`).
+      KEYCLOAK_REDIRECT_URI: ${KEYCLOAK_REDIRECT_URI:-http://localhost:3000/callback}
+      KEYCLOAK_LOGOUT_REDIRECT_URI: ${KEYCLOAK_LOGOUT_REDIRECT_URI:-http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:8080}
+      RUST_LOG: ${RUST_LOG:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      # Resource-owner password grant: off unless explicitly enabled.
+      ALLOW_PASSWORD_GRANT: ${ALLOW_PASSWORD_GRANT:-false}
+      # Bootstrap tenant, created on first start if absent.
+      DEFAULT_ORG_ID: ${DEFAULT_ORG_ID:-altius}
+      DEFAULT_ORG_NAME: ${DEFAULT_ORG_NAME:-Altius}
+      DEFAULT_HUB_ID: ${DEFAULT_HUB_ID:-jakarta}
+      DEFAULT_HUB_NAME: ${DEFAULT_HUB_NAME:-Jakarta}
+      # Must be the Keycloak user's `sub` — a UUID — not a username. The API
+      # resolves tenancy by matching the JWT `sub` against `user_orgs`, so
+      # "admin" matched no real user and every business endpoint answered 403
+      # to a correctly authenticated admin. This default is the pinned id of the
+      # `admin` user in deploy/keycloak/altius-realm.json. In production set it
+      # to your real admin's sub (Keycloak console -> Users -> the user -> ID).
+      DEFAULT_ADMIN_SUB: ${DEFAULT_ADMIN_SUB:-11111111-1111-4111-8111-111111111111}
+      # Maps: absent key = offline solver, no static maps.
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      GOOGLE_ROUTE_MODE: ${GOOGLE_ROUTE_MODE:-directions}
+      # Keycloak Admin service account: absent = user provisioning refuses.
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-}
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:-}
+      KEYCLOAK_ADMIN_BASE_URL: ${KEYCLOAK_ADMIN_BASE_URL:-http://keycloak:8081}
+      KEYCLOAK_ADMIN_REALM: ${KEYCLOAK_ADMIN_REALM:-altius}
+      # Messaging gateway: absent token = notify endpoints refuse.
+      NOTIFY_TOKEN: ${NOTIFY_TOKEN:-}
+      NOTIFY_SMS_URL: ${NOTIFY_SMS_URL:-}
+      NOTIFY_WHATSAPP_URL: ${NOTIFY_WHATSAPP_URL:-}
+      NOTIFY_SENDER: ${NOTIFY_SENDER:-}
+      # LLM dispatch agent: absent key = agent endpoints refuse.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      # McEasy VSMS/TMS worker: absent key = the worker does not start.
+      # config.rs has always read these, but compose never forwarded them, so
+      # setting MCEASY_API_KEY in .env silently did nothing.
+      MCEASY_API_KEY: ${MCEASY_API_KEY:-}
+      MCEASY_BASE_URL: ${MCEASY_BASE_URL:-https://vsms-v2-public.mceasy.com}
+      MCEASY_POLL_SECONDS: ${MCEASY_POLL_SECONDS:-60}
+      MCEASY_MASTER_SYNC_SECONDS: ${MCEASY_MASTER_SYNC_SECONDS:-3600}
+      MCEASY_RETENTION_HOURS: ${MCEASY_RETENTION_HOURS:-72}
+      # Device-event retention sweep. Same story: read but never forwarded.
+      EVENTS_RETENTION_DAYS: ${EVENTS_RETENTION_DAYS:-90}
+      # FCM v1 push. GOOGLE_APPLICATION_CREDENTIALS is a path INSIDE the
+      # container, so it also needs the service-account JSON bind-mounted —
+      # setting the variable alone leaves push registration refusing.
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+    restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    # localhost-only: local curl/mobile hit :8080 directly; on a VPS public
+    # traffic goes through Caddy /api/v3/*. Also keeps Prometheus /metrics
+    # off the public interface (Caddy does not proxy /metrics).
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      # The binary probes itself: the runtime image has no curl, and its
+      # /bin/sh is dash, which does not support the /dev/tcp bash builtin.
+      test: ["CMD", "/usr/local/bin/altius-api", "--health-check"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  caddy:
+    # Built rather than pulled: the stock image has no rate-limit module, and
+    # the Caddyfile's `rate_limit` directives will not parse without it.
+    build:
+      context: .
+      dockerfile: Caddy.Dockerfile
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Must never be EMPTY. Caddy's `{$VAR:default}` falls back only when the
+      # variable is UNSET, so an empty value produced a site block with no key
+      # — which Caddy reads as a global options block and refuses to load.
+      # The default is inert two ways: no host is ever `localhost.invalid`, so
+      # the block never matches real traffic, and the explicit `http://` scheme
+      # turns automatic HTTPS off for it, so Caddy contacts no ACME server.
+      # A bare `localhost` would have matched local requests and 308'd them all
+      # to https; a bare `localhost.invalid` would have tried to get a cert.
+      ALTIUS_DOMAIN: ${ALTIUS_DOMAIN:-http://localhost.invalid}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      api:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      web:
+        condition: service_started
+      landing:
+        condition: service_started
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      # Build args, not `environment`: Next inlines NEXT_PUBLIC_* into the
+      # client bundle at compile time, so a runtime value never reaches the
+      # browser. Changing any of these requires a rebuild, not a restart.
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8080}
+        # auth.ts reads URL + REALM and builds the issuer itself.
+        NEXT_PUBLIC_KEYCLOAK_URL: ${NEXT_PUBLIC_KEYCLOAK_URL:-http://localhost:8081}
+        NEXT_PUBLIC_KEYCLOAK_REALM: ${NEXT_PUBLIC_KEYCLOAK_REALM:-altius}
+        NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: ${NEXT_PUBLIC_KEYCLOAK_CLIENT_ID:-altius-web}
+    restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    ports:
+      - "3000:3000"
+
+  landing:
+    build:
+      context: .
+      dockerfile: apps/landing/Dockerfile
+      args:
+        # Browser-reachable dashboard origin (host ports). Not the Docker service name.
+        NEXT_PUBLIC_WEB_APP_URL: ${NEXT_PUBLIC_WEB_APP_URL:-http://127.0.0.1:3000}
+    restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    ports:
+      - "3001:3000"
+
+volumes:
+  postgres-data:
+  typedb-data:
+  caddy-data:
+  caddy-config:
