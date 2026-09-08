@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../services/auth_service.dart';
 
 /// Where bearer credentials live. Backed by the platform keystore/keychain in
 /// production; the SQLite `preferences` table is app-private but unencrypted,
@@ -142,18 +143,27 @@ class _Database extends GeneratedDatabase {
 }
 
 class WorkStore {
-  WorkStore.open(String path, {DateTime Function()? now, int Function()? offset, TokenStore? tokens})
-    : _db = _Database(NativeDatabase(File(path), setup: (db) {
-        db.execute('PRAGMA journal_mode=WAL');
-        db.execute('PRAGMA synchronous=FULL');
-      })),
-      _now = now ?? DateTime.now,
-      _offset = offset ?? (() => DateTime.now().timeZoneOffset.inMinutes),
-      _tokens = tokens ?? const SecureTokenStore();
+  WorkStore.open(
+    String path, {
+    DateTime Function()? now,
+    int Function()? offset,
+    TokenStore? tokens,
+    AuthService? auth,
+    this._demoWorkspace = true,
+  })  : _db = _Database(NativeDatabase(File(path), setup: (db) {
+          db.execute('PRAGMA journal_mode=WAL');
+          db.execute('PRAGMA synchronous=FULL');
+        })),
+        _now = now ?? DateTime.now,
+        _offset = offset ?? (() => DateTime.now().timeZoneOffset.inMinutes),
+        _tokens = tokens ?? const SecureTokenStore(),
+        _auth = auth ?? AuthService();
   final _Database _db;
   final TokenStore _tokens;
+  final AuthService _auth;
   final DateTime Function() _now;
   final int Function() _offset;
+  final bool _demoWorkspace;
   Future<void> _tail = Future.value();
   final Random _random = Random.secure();
   String get today => _day(_now().toUtc(), _offset());
@@ -172,13 +182,15 @@ class WorkStore {
       await _db.customStatement("INSERT OR IGNORE INTO preferences VALUES ('organization', 'Altius Demo')");
       await _db.customStatement("INSERT OR IGNORE INTO preferences VALUES ('hub', 'Jakarta')");
       await _db.customStatement("INSERT OR IGNORE INTO preferences VALUES ('language', 'id')");
-      for (final task in [
-        ['JKT-001', 'Nusantara Market', 'Jl. Sudirman 24, Jakarta Selatan', 18],
-        ['JKT-002', 'Cendana Distribution', 'Jl. Gatot Subroto 18, Jakarta Selatan', 32],
-        ['JKT-003', 'Meridian Fresh', 'Jl. Rasuna Said 8, Jakarta Selatan', 47],
-        ['JKT-004', 'Taman Sari Store', 'Jl. Kuningan 12, Jakarta Selatan', 61],
-      ]) {
-        await _db.customStatement('INSERT OR IGNORE INTO tasks (id,title,address,eta) VALUES (?,?,?,?)', task);
+      if (_demoWorkspace) {
+        for (final task in [
+          ['JKT-001', 'Nusantara Market', 'Jl. Sudirman 24, Jakarta Selatan', 18],
+          ['JKT-002', 'Cendana Distribution', 'Jl. Gatot Subroto 18, Jakarta Selatan', 32],
+          ['JKT-003', 'Meridian Fresh', 'Jl. Rasuna Said 8, Jakarta Selatan', 47],
+          ['JKT-004', 'Taman Sari Store', 'Jl. Kuningan 12, Jakarta Selatan', 61],
+        ]) {
+          await _db.customStatement('INSERT OR IGNORE INTO tasks (id,title,address,eta) VALUES (?,?,?,?)', task);
+        }
       }
     });
   }
@@ -189,64 +201,102 @@ class WorkStore {
   Future<String> draft(String key) => preference('draft:$key');
   Future<void> session(bool active) => _write(() => _pref('session', active ? 'true' : ''));
 
-  /// Bearer token for outbound calls. Never stored in the SQLite preferences.
-  Future<String> accessToken() => _tokens.read('accessToken');
+  /// Bearer token for outbound calls. Delegates to the secure auth service.
+  Future<String?> accessToken() => _auth.accessToken();
 
-  Future<void> login(String baseUrl, String username, String password) async {
-    if (username.isEmpty || password.isEmpty) throw ArgumentError('required');
-    final url = parseServerUrl(baseUrl).toString().replaceAll(RegExp(r'/+$'), '');
+  /// Persist the Keycloak / API configuration used by the PKCE flow.
+  Future<void> configureAuth({
+    required String apiBase,
+    required String issuer,
+    required String clientId,
+    required String redirectUri,
+  }) async {
+    final url = parseServerUrl(apiBase).toString().replaceAll(RegExp(r'/+$'), '');
+    await _auth.configure(issuer: issuer, clientId: clientId, redirectUri: redirectUri, apiBase: url);
+    await _pref('apiBase', url);
+  }
+
+  /// Authenticate with Keycloak PKCE and hydrate the workspace from the API.
+  Future<void> signInWithKeycloak() async {
+    final token = await _auth.login();
+    final base = await _auth.apiBase();
+    if (base == null || base.isEmpty) throw StateError('serverError');
     final client = HttpClient();
-    String? accessToken;
-    String? refreshToken;
-    int? expiresIn;
+    String? subject;
     String? organization;
     String? hub;
+    List<Map<String, dynamic>>? taskRows;
     try {
-      final req = await client.postUrl(Uri.parse('$url/api/v3/auth/login'));
-      req.headers.contentType = ContentType.json;
-      req.write(jsonEncode({'username': username, 'password': password}));
-      final res = await req.close().timeout(const Duration(seconds: 15));
-      final body = await res.transform(utf8.decoder).join();
-      if (res.statusCode == 401 || res.statusCode == 403) throw StateError('unauthorized');
-      if (res.statusCode != 200) throw StateError('serverError');
-      final data = jsonDecode(body) as Map<String, dynamic>;
-      final tokenData = data['data'] as Map<String, dynamic>?;
-      accessToken = tokenData?['accessToken'] as String?;
-      refreshToken = tokenData?['refreshToken'] as String?;
-      expiresIn = (tokenData?['expiresIn'] as int?) ?? (tokenData?['expiresIn'] as num?)?.toInt();
-      if (accessToken == null || accessToken.isEmpty) throw StateError('serverError');
+      final meReq = await client.getUrl(Uri.parse('$base/api/v3/auth/me'));
+      meReq.headers.set('authorization', 'Bearer $token');
+      final meRes = await meReq.close().timeout(const Duration(seconds: 15));
+      final meBody = await meRes.transform(utf8.decoder).join();
+      if (meRes.statusCode != 200) throw StateError('unauthorized');
+      final meData = jsonDecode(meBody) as Map<String, dynamic>;
+      final profile = meData['data'] as Map<String, dynamic>?;
+      subject = profile?['subject'] as String?;
+      organization = profile?['organization'] as String?;
+      hub = profile?['hub'] as String?;
 
-      final tReq = await client.getUrl(Uri.parse('$url/api/v3/tasks'));
-      tReq.headers.set('authorization', 'Bearer $accessToken');
+      final tReq = await client.getUrl(Uri.parse('$base/api/v3/tasks'));
+      tReq.headers.set('authorization', 'Bearer $token');
       final tRes = await tReq.close().timeout(const Duration(seconds: 15));
       final tBody = await tRes.transform(utf8.decoder).join();
       if (tRes.statusCode == 200) {
         final tData = jsonDecode(tBody) as Map<String, dynamic>;
-        organization = (tData['meta'] as Map<String, dynamic>?)?['organization'] as String?;
-        final tasks = (tData['data'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        if (tasks.isNotEmpty) hub = tasks.first['hub_id'] as String?;
+        organization ??= (tData['meta'] as Map<String, dynamic>?)?['organization'] as String?;
+        taskRows = (tData['data'] as List?)?.cast<Map<String, dynamic>>();
+      } else {
+        throw StateError('serverError');
       }
     } finally {
       client.close();
     }
-    await _tokens.write('accessToken', accessToken);
-    await _tokens.write('refreshToken', refreshToken ?? '');
-    if (expiresIn != null) {
-      await _tokens.write(
-        'accessExpiresAt',
-        _now().toUtc().add(Duration(seconds: expiresIn)).toIso8601String(),
-      );
-    }
+    final tasks = _parseTasks(taskRows ?? []);
     await _write(() async {
-      await _pref('apiBase', url);
-      await _pref('driverId', username);
+      await _db.customStatement('DELETE FROM tasks');
+      for (final t in tasks) {
+        await _db.customStatement('INSERT OR REPLACE INTO tasks (id,title,address,stage,eta) VALUES (?,?,?,?,?)', t);
+      }
+      await _pref('apiBase', base);
+      if (subject != null && subject.isNotEmpty) await _pref('driverId', subject);
       if (organization != null && organization.isNotEmpty) await _pref('organization', organization);
       if (hub != null && hub.isNotEmpty) await _pref('hub', hub);
       await _pref('session', 'true');
     });
   }
 
+  List<List<Object?>> _parseTasks(List<Map<String, dynamic>> rows) {
+    final out = <List<Object?>>[];
+    for (final row in rows) {
+      final id = row['id'] as String? ?? '';
+      final title = row['title'] as String? ?? '';
+      final stops = (row['stops'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+      String address = '';
+      var stage = TaskStage.assigned;
+      if (stops.isNotEmpty) {
+        final stop = stops.firstWhere(
+          (s) => (s['stage'] as String?) != 'completed' && (s['stage'] as String?) != 'departed' && (s['stage'] as String?) != 'skipped',
+          orElse: () => stops.last,
+        );
+        address = stop['address'] as String? ?? '';
+        stage = _mapStopStage(stop['stage'] as String? ?? 'pending');
+      }
+      final eta = (row['eta_minutes'] as num?)?.toInt() ?? (stops.isNotEmpty ? (stops.first['eta_minutes'] as num?)?.toInt() ?? 0 : 0);
+      if (id.isNotEmpty) out.add([id, title, address, stage.index, eta]);
+    }
+    return out;
+  }
+
+  TaskStage _mapStopStage(String stage) => switch (stage) {
+    'arrived' => TaskStage.arrived,
+    'working' => TaskStage.working,
+    'done' || 'completed' || 'departed' => TaskStage.done,
+    _ => TaskStage.assigned,
+  };
+
   Future<void> logout() async {
+    await _auth.logout();
     await _tokens.clear();
     await _write(() async {
       await _pref('session', '');
@@ -372,8 +422,9 @@ class WorkStore {
   /// each row by its receipt. Local-only events are stamped 'local' so they
   /// stop counting toward the outbox. Requires [accessToken] (Keycloak JWT
   /// with the `driver` role). Throws on transport/HTTP failure.
-  Future<int> syncNow({required String baseUrl, required String accessToken}) =>
+  Future<int> syncNow({required String baseUrl, required String? accessToken}) =>
       _write(() async {
+        if (accessToken == null || accessToken.isEmpty) throw StateError('unauthorized');
         await _pref('lastSyncAttempt', _now().toUtc().toIso8601String());
         final pending = await _db
             .customSelect("SELECT * FROM events WHERE delivery = 'pending' ORDER BY rowid")

@@ -66,6 +66,12 @@ const normalizeStops = (doc: TaskDoc): Record<string, unknown>[] => {
   return out;
 };
 
+/** Backend numbers arrive as strings often enough to be worth normalising. */
+const finiteOrUndefined = (v: unknown): number | undefined => {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : undefined;
+};
+
 const toTask = (doc: TaskDoc): DemoTask => {
   const root = doc.task ? flatten(doc.task) : flatten(doc);
   const stops = normalizeStops(doc);
@@ -84,6 +90,8 @@ const toTask = (doc: TaskDoc): DemoTask => {
     notes: String(root.notes ?? ""),
     arrival: root.arrival ? String(root.arrival) : undefined,
     departure: root.departure ? String(root.departure) : undefined,
+    lat: finiteOrUndefined(firstStop?.latitude),
+    lng: finiteOrUndefined(firstStop?.longitude),
   };
 };
 

@@ -5,7 +5,11 @@ export const demoTaskSchema = z.object({
   id: z.string(), title: z.string().trim().min(2).max(120), address: z.string().trim().min(3).max(240),
   hub: z.string(), flow: z.string(), assignee: z.string(), status: demoTaskStatusSchema,
   date: z.string(), time: z.string(), priority: z.enum(["Normal", "High"]),
-  notes: z.string().max(2000), arrival: z.string().optional(), departure: z.string().optional()
+  notes: z.string().max(2000), arrival: z.string().optional(), departure: z.string().optional(),
+  // Stop geometry, when the API supplies it. Optional because locally created
+  // tasks have only an address until it is geocoded.
+  lat: z.number().finite().min(-90).max(90).optional(),
+  lng: z.number().finite().min(-180).max(180).optional()
 });
 export type DemoTask = z.infer<typeof demoTaskSchema>;
 export type DemoTaskStatus = z.infer<typeof demoTaskStatusSchema>;

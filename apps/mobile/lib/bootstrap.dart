@@ -9,7 +9,7 @@ Future<void> bootstrap({String environment = 'dev'}) async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     final directory = await getApplicationSupportDirectory();
-    final store = WorkStore.open('${directory.path}/altius_$environment.sqlite');
+    final store = WorkStore.open('${directory.path}/altius_$environment.sqlite', demoWorkspace: environment != 'prod');
     await store.initialize();
     final cubit = WorkCubit(store);
     await cubit.refresh();

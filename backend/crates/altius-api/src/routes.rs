@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
@@ -28,6 +29,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v3/route/eta", post(eta))
         .route("/api/v3/route/optimize", post(optimize_route))
         .route("/api/v3/route/geocode", post(geocode))
+        .route("/api/v3/route/static-map", post(static_map))
         .route("/api/v3/places/autocomplete", post(autocomplete))
         .route("/api/v3/users", get(list_users))
         .route("/api/v3/hubs", get(list_hubs))
@@ -304,6 +306,56 @@ async fn optimize_route(
     let maps = MapsClient::new(s.http.clone(), s.config.google_maps_api_key.clone());
     let out = maps.optimize_stops(req.origin, &req.waypoints).await?;
     Ok(Json(json!({ "data": out })))
+}
+
+#[derive(serde::Deserialize)]
+struct StaticMapRequest {
+    markers: Vec<Coordinate>,
+    #[serde(default)]
+    polyline: Option<String>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
+}
+
+/// Render a route as a PNG. The Maps key stays server-side: the browser gets
+/// an image from *our* origin, never a Google URL bearing the credential.
+async fn static_map(
+    State(s): State<Arc<AppState>>,
+    _principal: AuthUser,
+    Json(req): Json<StaticMapRequest>,
+) -> ApiResult<axum::response::Response> {
+    if req.markers.is_empty() {
+        return Err(ApiError::BadRequest("at least one marker required".into()));
+    }
+    if req.markers.len() > crate::maps::MAX_OPTIMIZE_WAYPOINTS + 1 {
+        return Err(ApiError::BadRequest(format!(
+            "at most {} markers",
+            crate::maps::MAX_OPTIMIZE_WAYPOINTS + 1
+        )));
+    }
+    let maps = MapsClient::new(s.http.clone(), s.config.google_maps_api_key.clone());
+    if !maps.enabled() {
+        return Err(ApiError::Unavailable("maps not configured".into()));
+    }
+    let png = maps
+        .static_map(
+            &req.markers,
+            req.polyline.as_deref(),
+            req.width.unwrap_or(640),
+            req.height.unwrap_or(360),
+        )
+        .await?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "image/png"),
+            // Per-caller route geometry: cacheable in the browser, never shared.
+            (axum::http::header::CACHE_CONTROL, "private, max-age=300"),
+        ],
+        png,
+    )
+        .into_response())
 }
 
 #[derive(serde::Deserialize)]

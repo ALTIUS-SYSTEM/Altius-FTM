@@ -22,6 +22,12 @@ const MATRIX_URL: &str =
 const GEOCODE_URL: &str = "https://maps.googleapis.com/maps/api/geocode/json";
 const PLACES_URL: &str =
     "https://maps.googleapis.com/maps/api/place/autocomplete/json";
+const STATIC_MAP_URL: &str = "https://maps.googleapis.com/maps/api/staticmap";
+
+/// Largest static-map image we will render, in pixels per side.
+const MAX_STATIC_MAP_PX: u32 = 1280;
+/// Refuse to relay anything larger than a plausible map image.
+const MAX_STATIC_MAP_BYTES: usize = 4 * 1024 * 1024;
 
 /// Google enforces ~50 QPS per key on the web services — pace accordingly.
 const MIN_INTERVAL: Duration = Duration::from_millis(20);
@@ -49,6 +55,13 @@ struct Route {
     legs: Vec<Leg>,
     #[serde(default)]
     waypoint_order: Vec<usize>,
+    #[serde(default)]
+    overview_polyline: Option<EncodedPolyline>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EncodedPolyline {
+    points: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +143,10 @@ pub struct OptimizedRoute {
     pub total_meters: i64,
     /// `"live"` (Directions `optimize:true`) or `"nearest"` (offline fallback).
     pub source: &'static str,
+    /// Google-encoded road geometry for the whole route, when live. Renderable
+    /// directly by the static-map proxy; `None` in offline/fallback mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub polyline: Option<String>,
 }
 
 impl MapsClient {
@@ -237,6 +254,7 @@ impl MapsClient {
                 leg_seconds: vec![],
                 total_meters: 0,
                 source: if self.enabled() { "live" } else { "nearest" },
+                polyline: None,
             });
         }
         if !self.enabled() {
@@ -294,7 +312,45 @@ impl MapsClient {
             leg_seconds: route.legs.iter().map(|l| l.duration.value).collect(),
             total_meters: route.legs.iter().map(|l| l.distance.value).sum(),
             source: "live",
+            polyline: route.overview_polyline.as_ref().map(|p| p.points.clone()),
         })
+    }
+
+    /// Render a route as a PNG via the Static Maps API.
+    ///
+    /// Proxied rather than handed to the browser as a URL: the API key is a
+    /// server-side secret (see the module header), and a client-side map would
+    /// require shipping a second, separately-restricted browser key. Returns
+    /// the raw image bytes for the caller to relay.
+    pub async fn static_map(
+        &self,
+        markers: &[Coordinate],
+        polyline: Option<&str>,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, ApiError> {
+        let mut query = static_map_query(markers, polyline, width, height);
+        query.push(("key", self.key()?.to_string()));
+
+        self.pace().await;
+        let res = self
+            .http
+            .get(STATIC_MAP_URL)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|e| ApiError::upstream("maps", e))?;
+        if !res.status().is_success() {
+            return Err(ApiError::Unavailable(format!("staticmap http {}", res.status())));
+        }
+        let bytes = res
+            .bytes()
+            .await
+            .map_err(|e| ApiError::upstream("maps", e))?;
+        if bytes.len() > MAX_STATIC_MAP_BYTES {
+            return Err(ApiError::Unavailable("staticmap response too large".into()));
+        }
+        Ok(bytes.to_vec())
     }
 
     /// Stop-pair durations for the routing solver (Distance Matrix).
@@ -391,6 +447,46 @@ impl MapsClient {
 }
 
 /// Offline fallback: greedy nearest-neighbor ordering on haversine distance.
+/// Build the Static Maps query minus the credential.
+///
+/// Split out so the size clamp and marker cap are testable without a network
+/// call — and so the key is appended in exactly one place, by the caller that
+/// holds it, rather than threaded through the formatting logic.
+fn static_map_query(
+    markers: &[Coordinate],
+    polyline: Option<&str>,
+    width: u32,
+    height: u32,
+) -> Vec<(&'static str, String)> {
+    let w = width.clamp(1, MAX_STATIC_MAP_PX);
+    let h = height.clamp(1, MAX_STATIC_MAP_PX);
+    let mut query = vec![
+        ("size", format!("{w}x{h}")),
+        ("scale", "2".to_string()),
+        ("format", "png".to_string()),
+    ];
+    // Numbered pins in visit order, so the image alone tells the sequence.
+    for (i, m) in markers.iter().take(MAX_OPTIMIZE_WAYPOINTS + 1).enumerate() {
+        query.push((
+            "markers",
+            format!("color:0x0FA3B1|label:{}|{},{}", (i % 9) + 1, m.lat, m.lng),
+        ));
+    }
+    if let Some(p) = polyline {
+        query.push(("path", format!("weight:4|color:0x0FA3B1CC|enc:{p}")));
+    } else if markers.len() > 1 {
+        // No road geometry (offline solver): draw the stop order directly
+        // rather than implying a road-following path we do not have.
+        let pts = markers
+            .iter()
+            .map(|m| format!("{},{}", m.lat, m.lng))
+            .collect::<Vec<_>>()
+            .join("|");
+        query.push(("path", format!("weight:3|color:0x94A3B8AA|{pts}")));
+    }
+    query
+}
+
 pub fn greedy_order(origin: Coordinate, waypoints: &[Coordinate]) -> OptimizedRoute {
     let mut remaining: Vec<usize> = (0..waypoints.len()).collect();
     let mut order = Vec::with_capacity(waypoints.len());
@@ -418,6 +514,9 @@ pub fn greedy_order(origin: Coordinate, waypoints: &[Coordinate]) -> OptimizedRo
         leg_seconds,
         total_meters,
         source: "nearest",
+        // Straight-line fallback has no road geometry; the client draws the
+        // stop order itself rather than being handed a fake path.
+        polyline: None,
     }
 }
 
@@ -443,6 +542,40 @@ pub fn mode_marker(enabled: bool) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_map_query_clamps_and_never_carries_the_key() {
+        let pts = vec![Coordinate { lat: -6.2, lng: 106.8 }; MAX_OPTIMIZE_WAYPOINTS + 10];
+        let q = static_map_query(&pts, Some("abc123"), 99_999, 0);
+
+        let size = &q.iter().find(|(k, _)| *k == "size").unwrap().1;
+        assert_eq!(size, &format!("{MAX_STATIC_MAP_PX}x1"), "size must clamp both ways");
+
+        let markers = q.iter().filter(|(k, _)| *k == "markers").count();
+        assert_eq!(markers, MAX_OPTIMIZE_WAYPOINTS + 1, "marker count must be capped");
+
+        let path = &q.iter().find(|(k, _)| *k == "path").unwrap().1;
+        assert!(path.contains("enc:abc123"), "live geometry should be sent encoded");
+
+        // The credential is appended by the caller that holds it, never here.
+        assert!(!q.iter().any(|(k, _)| *k == "key"));
+    }
+
+    #[test]
+    fn static_map_falls_back_to_stop_order_without_geometry() {
+        let pts = [
+            Coordinate { lat: 1.0, lng: 2.0 },
+            Coordinate { lat: 3.0, lng: 4.0 },
+        ];
+        let q = static_map_query(&pts, None, 640, 360);
+        let path = &q.iter().find(|(k, _)| *k == "path").unwrap().1;
+        // Straight segments between stops — never an "enc:" path we do not have.
+        assert!(path.contains("1,2|3,4"));
+        assert!(!path.contains("enc:"));
+
+        // A single marker has no path at all.
+        assert!(!static_map_query(&pts[..1], None, 640, 360).iter().any(|(k, _)| *k == "path"));
+    }
 
     #[test]
     fn greedy_orders_nearest_first() {

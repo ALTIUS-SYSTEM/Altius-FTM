@@ -48,10 +48,26 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _server = TextEditingController();
-  final _email = TextEditingController();
-  final _password = TextEditingController();
+  final _apiBase = TextEditingController();
+  final _issuer = TextEditingController();
+  final _clientId = TextEditingController();
+  final _redirectUri = TextEditingController();
   bool _busy = false;
+
+  static const _defaultApiBase = String.fromEnvironment('API_BASE', defaultValue: '');
+  static const _defaultIssuer = String.fromEnvironment('KEYCLOAK_ISSUER', defaultValue: '');
+  static const _defaultClientId = String.fromEnvironment('KEYCLOAK_CLIENT_ID', defaultValue: '');
+  static const _defaultRedirectUri = String.fromEnvironment('KEYCLOAK_REDIRECT_URI', defaultValue: 'altius://auth');
+
+  @override
+  void initState() {
+    super.initState();
+    _apiBase.text = _defaultApiBase;
+    _issuer.text = _defaultIssuer;
+    _clientId.text = _defaultClientId;
+    _redirectUri.text = _defaultRedirectUri;
+  }
+
   @override
   Widget build(BuildContext context) {
     final cubit = context.read<WorkCubit>();
@@ -67,16 +83,16 @@ class _LoginScreenState extends State<LoginScreen> {
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(color: const Color(0xFFFDF1DF), borderRadius: BorderRadius.circular(14)),
-          child: Text('${s('demo')}\n${s('demoNotice')}', style: const TextStyle(fontSize: 12, color: Color(0xFF573300), height: 1.5)),
+          child: Text(s('demoNotice'), style: const TextStyle(fontSize: 12, color: Color(0xFF573300), height: 1.5)),
         ),
         const SizedBox(height: 28),
-        TextField(controller: _server, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'Server URL', hintText: 'https://api.altius.example'), onChanged: (_) => cubit.store.saveDraft('server', _server.text)),
-        const SizedBox(height: 6),
-        Text('Kosongkan Server URL untuk masuk mode demo.', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey, fontSize: 12)),
+        TextField(controller: _apiBase, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'API base URL', hintText: 'https://api.altius.example'), onChanged: (_) => cubit.store.saveDraft('apiBase', _apiBase.text)),
         const SizedBox(height: 14),
-        TextField(controller: _email, keyboardType: TextInputType.emailAddress, decoration: InputDecoration(labelText: s('email'), hintText: 'driver@altius.test'), onChanged: (_) => cubit.store.saveDraft('email', _email.text)),
+        TextField(controller: _issuer, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'Keycloak issuer', hintText: 'https://keycloak.altius.example/realms/altius'), onChanged: (_) => cubit.store.saveDraft('issuer', _issuer.text)),
         const SizedBox(height: 14),
-        TextField(controller: _password, obscureText: true, decoration: InputDecoration(labelText: s('password'))),
+        TextField(controller: _clientId, decoration: const InputDecoration(labelText: 'Client ID', hintText: 'altius-field-mobile'), onChanged: (_) => cubit.store.saveDraft('clientId', _clientId.text)),
+        const SizedBox(height: 14),
+        TextField(controller: _redirectUri, decoration: const InputDecoration(labelText: 'Redirect URI', hintText: 'altius://auth'), onChanged: (_) => cubit.store.saveDraft('redirectUri', _redirectUri.text)),
         const SizedBox(height: 10),
         Align(alignment: Alignment.centerLeft, child: TextButton(
           onPressed: () => showDialog<void>(context: context, builder: (_) => AlertDialog(title: Text(s('authHelp')), content: Text(Strings.fallback['authHelpBody']!), actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(s('cancel')))])),
@@ -86,12 +102,15 @@ class _LoginScreenState extends State<LoginScreen> {
         FilledButton(
           onPressed: _busy ? null : () async {
             setState(() => _busy = true);
-            final server = _server.text.trim();
-            if (server.isEmpty) {
-              await cubit.act(() => cubit.store.session(true));
-            } else {
-              await cubit.act(() => cubit.store.login(server, _email.text, _password.text));
-            }
+            await cubit.act(() async {
+              await cubit.store.configureAuth(
+                apiBase: _apiBase.text.trim(),
+                issuer: _issuer.text.trim(),
+                clientId: _clientId.text.trim(),
+                redirectUri: _redirectUri.text.trim(),
+              );
+              await cubit.store.signInWithKeycloak();
+            });
             if (mounted) setState(() => _busy = false);
           },
           child: Text(s('enter')),
@@ -104,7 +123,7 @@ class _LoginScreenState extends State<LoginScreen> {
           onChanged: (v) { if (v != null) cubit.act(() => cubit.store.language(v)); },
         ),
         const SizedBox(height: 24),
-        Text('© 2026 Altius · Demo v0.1', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey)),
+        Text('© 2026 Altius', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey)),
       ])),
     );
   }
@@ -462,7 +481,7 @@ class SettingsTab extends StatelessWidget {
             ListTile(leading: const Icon(Icons.outbox_rounded), title: Text(s('history')), subtitle: Text(rejected > 0 ? '$pending ${s('pending')} · $rejected ${s('rejectedEvent')}' : '$pending ${s('pending')}'), trailing: TextButton(onPressed: () => cubit.act(() async {
               final base = await cubit.store.preference('apiBase');
               final token = await cubit.store.accessToken();
-              if (base.isNotEmpty && token.isNotEmpty) {
+              if (base.isNotEmpty && token != null && token.isNotEmpty) {
                 try {
                   await cubit.store.syncNow(baseUrl: base, accessToken: token);
                 } catch (_) {

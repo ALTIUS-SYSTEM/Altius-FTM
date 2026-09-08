@@ -205,3 +205,5 @@ dialog.modal::backdrop { background: rgba(15,30,38,.45); }
   .search-field input { min-width: 120px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+
+.route-map { width: 100%; height: auto; display: block; border-radius: 10px; }

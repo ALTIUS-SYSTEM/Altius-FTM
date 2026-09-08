@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useDemo } from "@/components/demo-provider";
 import { Badge, Card, Empty, Field, Icon, Modal, Metric, Table } from "@/components/ui";
 import { downloadText, tasksCsv } from "@/data/adapter";
 import { DEMO_DATE, DRIVERS } from "@/data/model";
 import type { DemoRecord } from "@/data/model";
-import { dijkstra, etaMinutes, compareGpsStreams, evaluateCorridor, aggregateDaily } from "@altius/algos";
+import { optimizeRoute, staticMapUrl, type OptimizedRoute } from "@/data/route-api";
+import { compareGpsStreams, evaluateCorridor, aggregateDaily } from "@altius/algos";
 
 /* ---------- shared helpers ---------- */
 function SearchField({ value, onChange, placeholder = "Search" }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
@@ -68,7 +69,6 @@ export function Gallery() {
 }
 
 /* ---------- route ---------- */
-const DEMO_GRAPH = { Hub: [{ to: "S1", weight: 8 }, { to: "S2", weight: 14 }], S1: [{ to: "S2", weight: 4 }, { to: "S3", weight: 9 }], S2: [{ to: "S3", weight: 3 }, { to: "S4", weight: 11 }], S3: [{ to: "S4", weight: 5 }], S4: [] };
 export function RouteVisit() {
   const { state, update, notify } = useDemo();
   const [search, setSearch] = useState("");
@@ -85,16 +85,76 @@ export function RouteConfig() {
   <Card title="Constraints"><Field label="Capacity limit (kg)"><input type="number" min={1} max={5000} value={cfg.capacity} onChange={e => set({ capacity: Number(e.target.value) })}/></Field><label className="check-row"><input type="checkbox" checked={cfg.returnHub} onChange={e => set({ returnHub: e.target.checked })}/>Return to hub</label><label className="check-row"><input type="checkbox" checked={cfg.avoidTolls} onChange={e => set({ avoidTolls: e.target.checked })}/>Avoid tolls</label></Card>
   <Card title="Vehicles">{cfg.vehicles.map(v => <div key={v} className="visit-row"><span className="visit-name">{v}</span></div>)}<div className="info-box">Demo configuration only. No route engine is contacted.</div></Card></div>;
 }
-const METERS_PER_COST_UNIT = 1000;
 
 export function RouteResult() {
   const { state } = useDemo();
-  if (!state.routeGenerated) return <Empty title="No route computed yet" description="Select visits and run the demo optimizer." action={<Link className="primary link-btn" href="/route/visit">Go to visits</Link>}/>;
-  const r = dijkstra(DEMO_GRAPH, "Hub", "S4");
-  const eta = r ? etaMinutes(r.cost * METERS_PER_COST_UNIT, state.routeConfig.speed) : null;
-  return <div className="grid-2"><Card title="Computed demo route"><ol className="route-steps">{r?.path.map(n => <li key={n}><Badge tone="assigned">{n}</Badge></li>)}</ol><div className="info-box">Dijkstra over a fixed 5-node graph. Cost {r?.cost} units ≈ {r?.cost} km schematic. Demo ETA {eta?.toFixed(0)} min at {state.routeConfig.speed} km/h. Not road routing or live traffic.</div></Card>
-  <div className="map-panel"><span className="map-tag">Schematic result</span><svg viewBox="0 0 400 200" className="schematic"><rect width="400" height="200" fill="var(--surface-low)"/><path d="M30 160 L120 110 L210 120 L300 70 L370 45" stroke="var(--teal)" strokeWidth="3" fill="none"/>{[[30, 160], [120, 110], [210, 120], [300, 70], [370, 45]].map(([x, y], i) => <circle key={i} cx={x} cy={y} r="7" fill="var(--cyan)"/>)}</svg></div></div>;
+  const [route, setRoute] = useState<OptimizedRoute | null>(null);
+  const [mapUrl, setMapUrl] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  // Only stops the API gave coordinates for can be routed. Saying so beats
+  // silently planning a route over a subset of the selection.
+  const selected = state.tasks.filter(t => state.selectedVisits.includes(t.id));
+  const located = selected.filter((t): t is typeof t & { lat: number; lng: number } =>
+    typeof t.lat === "number" && typeof t.lng === "number");
+  const missing = selected.length - located.length;
+
+  useEffect(() => {
+    if (!state.routeGenerated || located.length < 2) return;
+    let objectUrl = "";
+    let live = true;
+    setLoading(true);
+    setError("");
+    const waypoints = located.map(t => ({ lat: t.lat, lng: t.lng }));
+    const origin = waypoints[0]!;
+    optimizeRoute(origin, waypoints.slice(1))
+      .then(async result => {
+        if (!live) return;
+        setRoute(result);
+        const ordered = [origin, ...result.order.map(i => waypoints[i + 1]!).filter(Boolean)];
+        try {
+          objectUrl = await staticMapUrl(ordered, result.polyline);
+          if (live) setMapUrl(objectUrl); else URL.revokeObjectURL(objectUrl);
+        } catch {
+          // A missing map is not a failed route — keep the order and ETA.
+        }
+      })
+      .catch((e: Error) => { if (live) setError(e.message); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.routeGenerated, state.selectedVisits.join(",")]);
+
+  if (!state.routeGenerated) return <Empty title="No route computed yet" description="Select visits and optimise." action={<Link className="primary link-btn" href="/route/visit">Go to visits</Link>}/>;
+  if (located.length < 2) return <Empty title="Not enough located stops" description={`Routing needs at least two stops with coordinates. ${missing} of ${selected.length} selected stop(s) have no position yet.`} action={<Link className="primary link-btn" href="/route/visit">Back to visits</Link>}/>;
+
+  const minutes = route ? Math.round(route.legSeconds.reduce((a, b) => a + b, 0) / 60) : null;
+  const km = route ? (route.totalMeters / 1000).toFixed(1) : null;
+  const ordered = route ? [located[0]!, ...route.order.map(i => located[i + 1]!).filter(Boolean)] : [];
+
+  return <div className="grid-2">
+    <Card title="Optimised route">
+      {loading && <p>Planning route…</p>}
+      {error && <div className="error-banner" role="alert">{error}</div>}
+      {route && <>
+        <ol className="route-steps">{ordered.map((t, i) => <li key={t.id}><Badge tone="assigned">{i + 1}</Badge> {t.title}<small className="cell-sub">{t.address}</small></li>)}</ol>
+        <div className="info-box">
+          {km} km · {minutes} min drive time.
+          {route.source === "live"
+            ? " Google Directions with live road geometry."
+            : " Offline nearest-neighbour fallback — straight-line distances, not road routing."}
+          {missing > 0 && ` ${missing} selected stop(s) omitted for lack of coordinates.`}
+        </div>
+      </>}
+    </Card>
+    <div className="map-panel">
+      <span className="map-tag">{route?.source === "live" ? "Google Static Maps" : "Schematic — no live routing"}</span>
+      {mapUrl ? <img src={mapUrl} alt={`Route through ${ordered.length} stops`} className="route-map"/> : <p className="cell-sub">No map image available.</p>}
+    </div>
+  </div>;
 }
+
 
 /* ---------- flow ---------- */
 export function FlowBuilder() {
