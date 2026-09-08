@@ -20,7 +20,7 @@ pub(crate) struct OptimizeRequest {
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v3/tasks", get(list_tasks))
-        .route("/api/v3/task/{id}", get(get_task))
+        .route("/api/v3/task/{id}", get(get_task).put(update_task))
         .route("/api/v3/task-create", post(create_task))
         .route("/api/v3/events", post(sync_events))
         .route("/api/v3/route/optimize", post(optimize_route))
@@ -61,12 +61,41 @@ async fn create_task(
     // carried no recognised role through.
     require_staff(&principal)?;
     let org = org_of(&s, &principal.subject).await?;
+    // Never trust body tenant_id for scoping — org comes from the JWT link.
+    let mut task = task;
+    task.tenant_id = org.clone();
     store(&s)?
         .create_task(&org, &task)
         .await
         // The store rejects a hub outside the caller's org; that is the
         // client's mistake, not an internal fault.
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(Json(json!({ "data": { "taskId": task.id } })))
+}
+
+async fn update_task(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+    Path(id): Path<String>,
+    Json(mut task): Json<Task>,
+) -> ApiResult<Json<Value>> {
+    require_staff(&principal)?;
+    if task.id != id {
+        return Err(ApiError::BadRequest(
+            "path id and body id must match".into(),
+        ));
+    }
+    let org = org_of(&s, &principal.subject).await?;
+    // Never trust body tenant_id for scoping — org comes from the JWT link.
+    task.tenant_id = org.clone();
+    store(&s)?.update_task(&org, &task).await.map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("not found") {
+            ApiError::NotFound
+        } else {
+            ApiError::BadRequest(msg)
+        }
+    })?;
     Ok(Json(json!({ "data": { "taskId": task.id } })))
 }
 

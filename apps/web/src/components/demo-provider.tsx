@@ -58,14 +58,16 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       // Persist outside the render phase, and only announce success if it
       // actually persisted — the toast used to fire unconditionally.
       queueMicrotask(() => {
-        try {
-          if (!adapter) throw new Error(configError);
-          adapter.save(next);
-          setError("");
-          if (message) setNotice(message);
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "This change could not be saved.");
-        }
+        void (async () => {
+          try {
+            if (!adapter) throw new Error(configError);
+            await adapter.save(next);
+            setError("");
+            if (message) setNotice(message);
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "This change could not be saved.");
+          }
+        })();
       });
       return next;
     });

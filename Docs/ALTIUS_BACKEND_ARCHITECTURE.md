@@ -111,3 +111,10 @@ Rust types in `altius-core` mirror them 1:1.
   matching the mobile `events_no_update`/`events_no_delete` triggers.
 - Rate limiting and body-size caps at the Axum layer; media uploads are
   presigned S3 URLs, never proxied.
+- **Postgres TLS**: `DATABASE_URL` `sslmode=require` uses rustls (Mozilla
+  roots); `disable`/`prefer`/omitted stay cleartext for compose and private
+  networks. See `backend/.env.example` and `backend/README.md` hardening.
+- **Ready vs health**: `GET /api/v3/ready` fails closed when persistence is
+  down; `GET /api/v3/health` is liveness only and does not disclose
+  integration posture. Edge TLS/HSTS live in the root `Caddyfile` when
+  `ALTIUS_DOMAIN` is set.

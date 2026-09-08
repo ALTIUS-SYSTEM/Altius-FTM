@@ -49,6 +49,14 @@ impl Store {
         }
     }
 
+    pub async fn update_task(&self, org: &str, task: &Task) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(s) => s.update_task(org, task).await,
+            // TypeDB update path is not wired; refuse rather than silent no-op.
+            Self::Typedb(_) => anyhow::bail!("task update is not supported on the TypeDB backend"),
+        }
+    }
+
     pub async fn record_event(
         &self,
         org: &str,

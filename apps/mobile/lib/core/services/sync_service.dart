@@ -67,12 +67,18 @@ class SyncService {
     }
   }
 
-  /// Flush the outbox once if the driver is authenticated.
+  /// Flush the outbox once if the driver is authenticated, then refresh tasks.
   Future<int> syncIfConfigured() async {
     final apiBase = await _auth.apiBase();
     final token = await _auth.accessToken();
     if (apiBase == null || token == null) return 0;
-    return _store.syncNow(baseUrl: apiBase, accessToken: token);
+    final sent = await _store.syncNow(baseUrl: apiBase, accessToken: token);
+    try {
+      await _store.pullTasks(baseUrl: apiBase, accessToken: token);
+    } on Object {
+      // Push succeeded; a pull failure must not undo outbox acknowledgements.
+    }
+    return sent;
   }
 
   /// Cancel background work and stop the connectivity listener.

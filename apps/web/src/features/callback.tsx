@@ -57,8 +57,7 @@ export function Callback() {
     }
     const redirectUri = `${window.location.origin}/callback`;
     finishLogin(cfg, code, redirectUri, params.get("state"))
-      .then(() => {
-        const token = sessionStorage.getItem("altius.token.access");
+      .then((token) => {
         const claims = token ? decodeJwt(token) : {};
         const role = extractRole(claims);
         update((s) => ({ ...s, session: true, role }));

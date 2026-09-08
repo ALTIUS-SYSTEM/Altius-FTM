@@ -1,13 +1,19 @@
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.1
-    command: ["start-dev", "--http-port=8081"]
+    # Imports deploy/keycloak/altius-realm.json on first start (realm altius +
+    # public PKCE clients altius-web / altius-mobile with aud=altius-api).
+    command: ["start-dev", "--http-port=8081", "--import-realm"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       KC_DB: dev-file
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./deploy/keycloak:/opt/keycloak/data/import:ro
     restart: unless-stopped
     # Published because the browser performs the PKCE redirect directly.
     ports:
@@ -57,7 +63,9 @@ services:
     environment:
       BIND: 0.0.0.0:8080
       STORE_BACKEND: ${STORE_BACKEND:-postgres}
-      DATABASE_URL: ${DATABASE_URL:-postgres://altius:altius@postgres:5432/altius}
+      # Cleartext on the compose network. Production managed Postgres:
+      # DATABASE_URL=...?sslmode=require (see backend/.env.example).
+      DATABASE_URL: ${DATABASE_URL:-postgres://altius:altius@postgres:5432/altius?sslmode=disable}
       TYPEDB_ADDRESS: ${TYPEDB_ADDRESS:-typedb:1729}
       TYPEDB_USERNAME: ${TYPEDB_USERNAME:-admin}
       TYPEDB_PASSWORD: ${TYPEDB_PASSWORD:-password}
@@ -69,7 +77,8 @@ services:
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-altius-api}
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
       AGENT_STATE_SECRET: ${AGENT_STATE_SECRET}
-      KEYCLOAK_REDIRECT_URI: ${KEYCLOAK_REDIRECT_URI:-http://localhost:3000/api/auth/callback/keycloak}
+      # Must match apps/web PKCE redirect (`${origin}/callback`).
+      KEYCLOAK_REDIRECT_URI: ${KEYCLOAK_REDIRECT_URI:-http://localhost:3000/callback}
       KEYCLOAK_LOGOUT_REDIRECT_URI: ${KEYCLOAK_LOGOUT_REDIRECT_URI:-http://localhost:3000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:8080}
       RUST_LOG: ${RUST_LOG:-info}
@@ -168,6 +177,9 @@ services:
     build:
       context: .
       dockerfile: apps/landing/Dockerfile
+      args:
+        # Browser-reachable dashboard origin (host ports). Not the Docker service name.
+        NEXT_PUBLIC_WEB_APP_URL: ${NEXT_PUBLIC_WEB_APP_URL:-http://127.0.0.1:3000}
     restart: unless-stopped
     read_only: true
     tmpfs: [/tmp]

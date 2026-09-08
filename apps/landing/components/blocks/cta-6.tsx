@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
+import { webLoginUrl } from "@/lib/web-app";
 
 type Cell = { r: number; c: number; Icon: LucideIcon };
 
@@ -126,13 +127,14 @@ export default function Cta6() {
           <h2 className="text-xl sm:text-3xl md:text-4xl lg:text-5xl font-semibold text-neutral-900 dark:text-white tracking-tight leading-tight max-w-[22ch]">
             Connect Altius to your stack
           </h2>
-          <motion.button
+          <motion.a
+            href={webLoginUrl()}
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.97 }}
-            className="mt-4 sm:mt-6 px-5 py-2.5 rounded-md bg-[#00677e] text-white dark:bg-white dark:text-neutral-950 text-sm font-medium cursor-pointer"
+            className="mt-4 sm:mt-6 inline-block px-5 py-2.5 rounded-md bg-[#00677e] text-white dark:bg-white dark:text-neutral-950 text-sm font-medium no-underline"
           >
-            Browse integrations
-          </motion.button>
+            Open the dashboard
+          </motion.a>
         </motion.div>
       </div>
     </section>

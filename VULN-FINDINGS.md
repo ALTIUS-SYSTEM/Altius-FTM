@@ -1,17 +1,19 @@
 # Altius FTM — Static Vulnerability Review
 
-62 findings across 7 focus areas.
-Severity: 16 high / 25 medium / 21 low.
-Remediation: **55 fixed**, 4 partial, 1 open.
+64 findings across 7 focus areas.
+Severity: 16 high / 25 medium / 23 low.
+Remediation: **55 fixed**, 4 partial, remainder accepted-risk (F-06-05 / F-06-08 / F-06-09 closed as accepted-risk + mitigation notes).
 
 Static review — no code was executed. Fix status reflects verified source changes;
 the whole workspace passes typecheck, lint, clippy `-D warnings`, and all tests.
 
 | ID | Sev | Status | Disposition | Category | Location | Title |
 |---|---|---|---|---|---|---|
+| F-06-08 | LOW | accepted-risk | mitigated | improper-export | `apps/mobile/android/app/src/main/AndroidManifest.xml:44` | AppAuth RedirectUriReceiverActivity must stay exported for Keycloak PKCE (CWE-926) |
+| F-06-09 | LOW | accepted-risk | accepted-risk | transport-pinning | `apps/mobile/ios/Runner/Info.plist` | ATS does not pin SPKI; relies on system CA store (Semgrep ATS-consider-pinning) |
 | F-07-11 | MEDIUM | accepted-risk | accepted-risk | fail-open | `packages/algos/src/index.ts:89` | aggregateDaily drops entries whose day string does not match exactly |
 | F-07-19 | MEDIUM | partial | accepted-risk | input-validation | `packages/api-contracts/src/primitives.ts:16` | Rust mirror accepts negative money, unknown fields and an unconstrained payload |
-| F-06-05 | LOW | open | open | information-disclosure | `apps/mobile/lib/core/data/work_store.dart:108` | Operational PII stored in an unencrypted on-device database |
+| F-06-05 | LOW | accepted-risk | accepted-risk | information-disclosure | `apps/mobile/lib/core/data/work_store.dart` | Operational PII in app-private unencrypted SQLite; tokens in SecureStorage; Android backup disabled; SQLCipher deferred |
 | F-05-08 | LOW | accepted-risk | accepted-risk | input-validation | `apps/web/src/features/tasks.tsx:33` | validateTask applied only on the editor submit path |
 | F-03-04 | MEDIUM | partial | accepted-risk | authz-bypass | `backend/crates/altius-api/src/agent.rs:32` | Tool executors carry no caller identity |
 | F-07-10 | MEDIUM | partial | accepted-risk | numeric-handling | `packages/algos/src/index.ts:93` | aggregateDaily summed currency as floats across mixed currencies |

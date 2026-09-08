@@ -19,9 +19,8 @@ void main() {
     await directory.delete(recursive: true);
   });
 
-  test('server URL must be https with a host', () {
-    // A plain http:// base sends the driver's password, and every later bearer
-    // token, in the clear — so this guard is the whole defence.
+  test('server URL must be https with a host (http only on loopback)', () {
+    // A plain http:// base to a remote host sends bearer tokens in the clear.
     for (final bad in [
       'http://api.altius.test',
       'api.altius.test',
@@ -33,6 +32,75 @@ void main() {
       expect(() => parseServerUrl(bad), throwsArgumentError, reason: bad);
     }
     expect(parseServerUrl('  https://api.altius.test  ').host, 'api.altius.test');
+    expect(parseServerUrl('http://127.0.0.1:8080').host, '127.0.0.1');
+    expect(parseServerUrl('http://localhost:8080').scheme, 'http');
+  });
+
+  test('API task envelope parser reads Postgres and TypeDB shapes', () {
+    final pg = store.debugParseTasks([
+      {
+        'task': {
+          'id': 'T-1',
+          'title': 'Depot drop',
+          'hub_id': 'jakarta',
+          'stage': 'assigned',
+          'day': '2026-09-07',
+        },
+        'stops': [
+          {
+            'id': 'S-1',
+            'address': 'Jl. Sudirman',
+            'lat': -6.2,
+            'lng': 106.8,
+            'stage': 'pending',
+            'sequence': 0,
+          },
+        ],
+      },
+    ]);
+    expect(pg.single[0], 'T-1');
+    expect(pg.single[2], 'Jl. Sudirman');
+    expect(pg.single[5], -6.2);
+    expect(pg.single[6], 106.8);
+    expect(pg.single[7], 'S-1');
+
+    final typedb = store.debugParseTasks([
+      {
+        'task': {
+          'task-id': {'value': 'T-2'},
+          'title': {'value': 'Pickup'},
+          'hub-id': {'value': 'bandung'},
+        },
+        'stops': [
+          {
+            'stop': {
+              'stop-id': {'value': 'S-2'},
+              'address': {'value': 'Jl. Asia Afrika'},
+              'latitude': {'value': '-6.9'},
+              'longitude': {'value': '107.6'},
+              'stage': {'value': 'arrived'},
+            },
+          },
+        ],
+      },
+    ]);
+    expect(typedb.single[0], 'T-2');
+    expect(typedb.single[3], TaskStage.arrived.index);
+    expect(typedb.single[7], 'S-2');
+  });
+
+  test('migration from v6 adds stop_id on tasks', () async {
+    await store.close();
+    await _seedSchema(directory.path, 'work.sqlite', 6);
+    final reopened = WorkStore.open(
+      '${directory.path}/work.sqlite',
+      now: () => clock,
+      offset: () => 420,
+      demoWorkspace: false,
+    );
+    await reopened.initialize();
+    expect((await reopened.tasks()).single.stopId, isNull);
+    await reopened.close();
   });
 
   test('odometer readings are validated before the report becomes immutable', () async {

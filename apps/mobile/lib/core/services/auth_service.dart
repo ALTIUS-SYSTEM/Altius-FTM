@@ -2,25 +2,53 @@ import 'dart:convert';
 import 'package:flutter_appauth/flutter_appauth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+/// Keycloak authorization-code + PKCE for the driver app.
+///
+/// Config and tokens live in [FlutterSecureStorage] only — never in SQLite
+/// preferences. Storage key names are app-owned (`auth.*`); they are unrelated
+/// to web `NEXT_PUBLIC_*` build env vars.
 class AuthService {
   final FlutterAppAuth _appAuth = const FlutterAppAuth();
   final FlutterSecureStorage _secure = const FlutterSecureStorage(
     iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device),
   );
 
-  static const _kIssuer = 'NEXT_PUBLIC_KEYCLOAK_ISSUER';
-  static const _kClientId = 'NEXT_PUBLIC_KEYCLOAK_CLIENT_ID';
-  static const _kRedirectUrl = 'NEXT_PUBLIC_KEYCLOAK_REDIRECT_URI';
-  static const _kApiBase = 'NEXT_PUBLIC_API_BASE';
+  static const _kIssuer = 'auth.issuer';
+  static const _kClientId = 'auth.clientId';
+  static const _kRedirectUrl = 'auth.redirectUri';
+  static const _kApiBase = 'auth.apiBase';
+
+  /// Legacy keys from an earlier mistaken `NEXT_PUBLIC_*` naming. Read once
+  /// and migrate so upgrades do not force drivers to re-enter config.
+  static const _legacyIssuer = 'NEXT_PUBLIC_KEYCLOAK_ISSUER';
+  static const _legacyClientId = 'NEXT_PUBLIC_KEYCLOAK_CLIENT_ID';
+  static const _legacyRedirectUrl = 'NEXT_PUBLIC_KEYCLOAK_REDIRECT_URI';
+  static const _legacyApiBase = 'NEXT_PUBLIC_API_BASE';
+
+  Future<String?> _readConfig(String key, String legacyKey) async {
+    final current = await _secure.read(key: key);
+    if (current != null && current.isNotEmpty) return current;
+    final legacy = await _secure.read(key: legacyKey);
+    if (legacy == null || legacy.isEmpty) return null;
+    await _secure.write(key: key, value: legacy);
+    await _secure.delete(key: legacyKey);
+    return legacy;
+  }
 
   /// Authenticate the driver with Keycloak using authorization code + PKCE.
   /// Returns the access token when the flow completes successfully.
   Future<String> login() async {
-    final issuer = await _secure.read(key: _kIssuer);
-    final clientId = await _secure.read(key: _kClientId);
-    final redirectUrl = await _secure.read(key: _kRedirectUrl);
-    if (issuer == null || clientId == null || redirectUrl == null) {
-      throw StateError('Keycloak configuration not configured');
+    final issuer = await _readConfig(_kIssuer, _legacyIssuer);
+    final clientId = await _readConfig(_kClientId, _legacyClientId);
+    final redirectUrl = await _readConfig(_kRedirectUrl, _legacyRedirectUrl);
+    if (issuer == null || issuer.isEmpty) {
+      throw StateError('authConfigMissing');
+    }
+    if (clientId == null || clientId.isEmpty) {
+      throw StateError('authConfigMissing');
+    }
+    if (redirectUrl == null || redirectUrl.isEmpty) {
+      throw StateError('authConfigMissing');
     }
 
     final result = await _appAuth.authorizeAndExchangeCode(
@@ -54,9 +82,9 @@ class AuthService {
   /// Refresh the access token if a refresh token is stored.
   Future<String?> refresh() async {
     final refreshToken = await _secure.read(key: 'refreshToken');
-    final issuer = await _secure.read(key: _kIssuer);
-    final clientId = await _secure.read(key: _kClientId);
-    final redirectUrl = await _secure.read(key: _kRedirectUrl);
+    final issuer = await _readConfig(_kIssuer, _legacyIssuer);
+    final clientId = await _readConfig(_kClientId, _legacyClientId);
+    final redirectUrl = await _readConfig(_kRedirectUrl, _legacyRedirectUrl);
     if (refreshToken == null || issuer == null || clientId == null || redirectUrl == null) return null;
 
     final result = await _appAuth.token(
@@ -102,14 +130,22 @@ class AuthService {
     required String redirectUri,
     required String apiBase,
   }) async {
+    if (issuer.isEmpty || clientId.isEmpty || redirectUri.isEmpty || apiBase.isEmpty) {
+      throw StateError('authConfigMissing');
+    }
     await _secure.write(key: _kIssuer, value: issuer);
     await _secure.write(key: _kClientId, value: clientId);
     await _secure.write(key: _kRedirectUrl, value: redirectUri);
     await _secure.write(key: _kApiBase, value: apiBase);
+    // Drop legacy names so a later read cannot prefer stale values.
+    await _secure.delete(key: _legacyIssuer);
+    await _secure.delete(key: _legacyClientId);
+    await _secure.delete(key: _legacyRedirectUrl);
+    await _secure.delete(key: _legacyApiBase);
   }
 
   /// Return the configured API base URL.
-  Future<String?> apiBase() => _secure.read(key: _kApiBase);
+  Future<String?> apiBase() => _readConfig(_kApiBase, _legacyApiBase);
 
   /// Read the raw JWT claims from the current access token.
   Future<Map<String, dynamic>?> claims() async {
@@ -126,15 +162,15 @@ class AuthService {
     }
   }
 
-  /// Whether a session is active.
+  /// Whether a Keycloak session flag is active.
   Future<bool> isSignedIn() async => await _secure.read(key: 'session') == 'true';
 
-  /// Clear all stored tokens.
+  /// Clear all stored tokens (keeps IdP/API config for the next sign-in).
   Future<void> logout() async {
     await _secure.delete(key: 'accessToken');
     await _secure.delete(key: 'refreshToken');
     await _secure.delete(key: 'idToken');
-    await _secure.write(key: 'accessTokenExpiresAt', value: '');
+    await _secure.delete(key: 'accessTokenExpiresAt');
     await _secure.write(key: 'session', value: '');
   }
 }

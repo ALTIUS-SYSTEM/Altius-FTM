@@ -14,14 +14,67 @@ use altius_core::{DeviceEvent, EventReceipt, GpsQuality, Id, StopStatus, Task, c
 
 refinery::embed_migrations!("migrations");
 
+/// Whether `sslmode` requires a TLS connector.
+///
+/// `disable` and `prefer` use cleartext (`NoTls`) so local compose and
+/// private-network Postgres keep working without certificates. Production
+/// managed Postgres must set `sslmode=require` (rustls + Mozilla roots).
+fn ssl_mode_requires_tls(mode: tokio_postgres::config::SslMode) -> bool {
+    matches!(mode, tokio_postgres::config::SslMode::Require)
+}
+
+fn rustls_connector() -> tokio_postgres_rustls::MakeRustlsConnect {
+    // Idempotent: Prefer/Require paths may call this more than once per process.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    tokio_postgres_rustls::MakeRustlsConnect::with_webpki_roots()
+}
+
 /// Connect to PostgreSQL and build a connection pool.
 ///
-/// `sslmode` in `DATABASE_URL` is not yet handled; production deployments are
-/// expected to terminate TLS at the edge or run PostgreSQL on a private network.
+/// Honour `sslmode` in `DATABASE_URL`:
+/// - `disable` / `prefer` (default when omitted) → `NoTls` (local compose / VPC)
+/// - `require` → rustls with Mozilla CA roots (managed Postgres)
 pub async fn connect(url: &str) -> anyhow::Result<Pool> {
     let cfg: tokio_postgres::Config = url.parse().context("parse DATABASE_URL")?;
-    let mgr = deadpool_postgres::Manager::new(cfg, tokio_postgres::NoTls);
+    let mode = cfg.get_ssl_mode();
+    let mgr = if ssl_mode_requires_tls(mode) {
+        tracing::info!("postgres pool: sslmode=require (rustls)");
+        deadpool_postgres::Manager::new(cfg, rustls_connector())
+    } else {
+        tracing::info!(?mode, "postgres pool: cleartext (NoTls)");
+        deadpool_postgres::Manager::new(cfg, tokio_postgres::NoTls)
+    };
     Ok(deadpool_postgres::Pool::builder(mgr).max_size(16).build()?)
+}
+
+#[cfg(test)]
+mod connect_tests {
+    use super::ssl_mode_requires_tls;
+
+    fn mode(url: &str) -> tokio_postgres::config::SslMode {
+        let cfg: tokio_postgres::Config = url.parse().expect("parse");
+        cfg.get_ssl_mode()
+    }
+
+    #[test]
+    fn sslmode_require_enables_tls() {
+        assert!(ssl_mode_requires_tls(mode(
+            "postgres://u:p@db.example.com:5432/altius?sslmode=require"
+        )));
+    }
+
+    #[test]
+    fn sslmode_disable_and_default_stay_cleartext() {
+        assert!(!ssl_mode_requires_tls(mode(
+            "postgres://altius:altius@localhost:5432/altius"
+        )));
+        assert!(!ssl_mode_requires_tls(mode(
+            "postgres://altius:altius@localhost:5432/altius?sslmode=disable"
+        )));
+        assert!(!ssl_mode_requires_tls(mode(
+            "postgres://altius:altius@localhost:5432/altius?sslmode=prefer"
+        )));
+    }
 }
 
 /// Run embedded SQL migrations against the pool.
@@ -147,7 +200,12 @@ impl PgStore {
     pub async fn tasks_for_org(&self, org_id: &str) -> anyhow::Result<Vec<Value>> {
         self.fetch_json(
             "SELECT jsonb_build_object( \
-                'task', row_to_json(t), \
+                'task', to_jsonb(t) || jsonb_build_object( \
+                    'assignee', ( \
+                        SELECT ta.driver_sub FROM task_assignments ta \
+                        WHERE ta.task_id = t.id LIMIT 1 \
+                    ) \
+                ), \
                 'stops', COALESCE(( \
                     SELECT jsonb_agg(row_to_json(s) ORDER BY s.sequence) \
                     FROM stops s WHERE s.task_id = t.id \
@@ -164,7 +222,12 @@ impl PgStore {
     pub async fn task_by_id(&self, org_id: &str, task_id: &str) -> anyhow::Result<Option<Value>> {
         self.fetch_json_opt(
             "SELECT jsonb_build_object( \
-                'task', row_to_json(t), \
+                'task', to_jsonb(t) || jsonb_build_object( \
+                    'assignee', ( \
+                        SELECT ta.driver_sub FROM task_assignments ta \
+                        WHERE ta.task_id = t.id LIMIT 1 \
+                    ) \
+                ), \
                 'stops', COALESCE(( \
                     SELECT jsonb_agg(row_to_json(s) ORDER BY s.sequence) \
                     FROM stops s WHERE s.task_id = t.id \
@@ -253,6 +316,9 @@ impl PgStore {
     /// Append a device event atomically: insert the immutable event, update the
     /// stop stage, and roll the task stage forward — all in one transaction.
     /// A replayed request key short-circuits to `Accepted` without re-writing.
+    ///
+    /// When `stop_id` is omitted, the first non-terminal stop on the task is
+    /// used so single-stop mobile clients can sync without a local stop table.
     pub async fn record_event(
         &self,
         org: &str,
@@ -261,6 +327,7 @@ impl PgStore {
     ) -> anyhow::Result<EventReceipt> {
         let mut client = self.conn().await?;
         let tx = client.transaction().await.context("open record_event tx")?;
+        let event_id = ev.event_id.clone();
 
         let request_key = Self::request_key(org, driver_sub, &ev.idempotency_key);
         if let Some(existing) = tx
@@ -274,12 +341,35 @@ impl PgStore {
         {
             let id: String = existing.get(0);
             return Ok(EventReceipt::Accepted {
+                event_id,
                 server_event_id: id,
             });
         }
 
+        // Resolve the stop to advance. Prefer the client-supplied id; otherwise
+        // pick the first stop that is not already finished.
+        let resolved_stop: Option<String> = match &ev.stop_id {
+            Some(id) => Some(id.clone()),
+            None => tx
+                .query_opt(
+                    "SELECT s.id \
+                     FROM stops s \
+                     JOIN tasks t ON t.id = s.task_id \
+                     JOIN org_hubs oh ON oh.hub_id = t.hub_id \
+                     WHERE oh.org_id = $1 AND t.id = $2 \
+                       AND s.stage NOT IN ('completed', 'departed', 'skipped') \
+                     ORDER BY s.sequence \
+                     LIMIT 1 \
+                     FOR UPDATE OF s",
+                    &[&org, &ev.task_id],
+                )
+                .await
+                .context("resolve active stop")?
+                .map(|r| r.get::<usize, String>(0)),
+        };
+
         let mut new_stage: Option<StopStatus> = None;
-        if let Some(stop_id) = &ev.stop_id {
+        if let Some(stop_id) = &resolved_stop {
             let row = tx
                 .query_opt(
                     "SELECT s.stage \
@@ -294,6 +384,7 @@ impl PgStore {
                 .context("read stop stage")?;
             let Some(row) = row else {
                 return Ok(EventReceipt::Conflict {
+                    event_id,
                     reason: format!(
                         "stop {stop_id} is not part of task {} in this organization",
                         ev.task_id
@@ -303,6 +394,7 @@ impl PgStore {
             let cur: String = row.get(0);
             let Ok(from) = serde_json::from_str::<StopStatus>(&format!("\"{cur}\"")) else {
                 return Ok(EventReceipt::Conflict {
+                    event_id,
                     reason: format!("stop {stop_id} has unknown stage {cur:?}"),
                 });
             };
@@ -310,16 +402,21 @@ impl PgStore {
                 Ok(next) => new_stage = Some(next),
                 Err(e) => {
                     return Ok(EventReceipt::Conflict {
+                        event_id,
                         reason: e.to_string(),
                     });
                 }
             }
+        } else if ev.stop_id.is_none() {
+            // No stop to advance (task missing or all stops terminal). Still
+            // accept the event as an audit row so the outbox can clear.
         }
 
         let action = serde_json::to_value(ev.action)?
             .as_str()
             .unwrap_or_default()
             .to_string();
+        let stop_for_insert = resolved_stop.clone();
         tx.execute(
             "INSERT INTO device_events \
              (id, org_id, driver_sub, device_id, task_id, stop_id, request_key, action, occurred_utc, offset_min, day, payload) \
@@ -330,7 +427,7 @@ impl PgStore {
                 &driver_sub,
                 &ev.device_id,
                 &ev.task_id,
-                &ev.stop_id,
+                &stop_for_insert,
                 &request_key,
                 &action,
                 &ev.time.utc,
@@ -342,7 +439,7 @@ impl PgStore {
         .await
         .context("insert device_event")?;
 
-        if let (Some(stop_id), Some(stage)) = (&ev.stop_id, new_stage) {
+        if let (Some(stop_id), Some(stage)) = (&resolved_stop, new_stage) {
             let stage_name = serde_json::to_value(stage)?
                 .as_str()
                 .unwrap_or_default()
@@ -359,13 +456,43 @@ impl PgStore {
             .context("advance stop stage")?;
         }
 
-        if matches!(new_stage, Some(StopStatus::Departed)) {
+        // Arrive / activity start → task is in progress. Complete / depart when
+        // every stop is terminal → task completed. Mobile ends at
+        // `complete_activity` (no separate depart), so completion must not wait
+        // for Departed alone.
+        if matches!(
+            new_stage,
+            Some(StopStatus::Arrived | StopStatus::Working | StopStatus::Departed)
+        ) {
             tx.execute(
-                "UPDATE tasks SET stage = 'in_progress' WHERE id = $2 AND org_id = $1",
+                "UPDATE tasks SET stage = 'in_progress' \
+                 WHERE id = $2 AND org_id = $1 AND stage = 'assigned'",
                 &[&org, &ev.task_id],
             )
             .await
             .context("advance task stage")?;
+        }
+        if matches!(
+            new_stage,
+            Some(StopStatus::Completed | StopStatus::Departed | StopStatus::Skipped)
+        ) {
+            let unfinished: i64 = tx
+                .query_one(
+                    "SELECT COUNT(*)::bigint FROM stops \
+                     WHERE task_id = $1 AND stage NOT IN ('completed', 'departed', 'skipped')",
+                    &[&ev.task_id],
+                )
+                .await
+                .context("count unfinished stops")?
+                .get(0);
+            if unfinished == 0 {
+                tx.execute(
+                    "UPDATE tasks SET stage = 'completed' WHERE id = $2 AND org_id = $1",
+                    &[&org, &ev.task_id],
+                )
+                .await
+                .context("complete task")?;
+            }
         }
 
         if let Some(loc) = ev.location {
@@ -406,8 +533,85 @@ impl PgStore {
 
         tx.commit().await.context("commit record_event")?;
         Ok(EventReceipt::Accepted {
+            event_id,
             server_event_id: ev.event_id.clone(),
         })
+    }
+
+    /// Update an existing task's title, stage, assignee, and primary stop address.
+    /// Org scoping is enforced; hub cannot be moved across tenants.
+    pub async fn update_task(&self, org: &str, task: &Task) -> anyhow::Result<()> {
+        let mut client = self.conn().await?;
+        let tx = client.transaction().await.context("open update_task tx")?;
+
+        let allocated: bool = tx
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM org_hubs WHERE org_id = $1 AND hub_id = $2)",
+                &[&org, &task.hub_id],
+            )
+            .await
+            .context("verify hub allocation")?
+            .get(0);
+        if !allocated {
+            anyhow::bail!("hub {} is not allocated to organization {org}", task.hub_id);
+        }
+
+        let stage = serde_json::to_value(task.status)?
+            .as_str()
+            .unwrap_or("assigned")
+            .to_string();
+        let updated = tx
+            .execute(
+                "UPDATE tasks SET title = $3, stage = $4, hub_id = $5 \
+                 WHERE id = $2 AND org_id = $1",
+                &[&org, &task.id, &task.title, &stage, &task.hub_id],
+            )
+            .await
+            .context("update task")?;
+        if updated == 0 {
+            anyhow::bail!("task {} not found in organization {org}", task.id);
+        }
+
+        if let Some(stop) = task.stops.first() {
+            let sstage = serde_json::to_value(stop.status)?
+                .as_str()
+                .unwrap_or("pending")
+                .to_string();
+            tx.execute(
+                "UPDATE stops SET name = $3, address = $4, lat = $5, lng = $6, stage = $7, service_seconds = $8 \
+                 WHERE id = $2 AND task_id = $1",
+                &[
+                    &task.id,
+                    &stop.id,
+                    &stop.name,
+                    &stop.address,
+                    &stop.location.lat,
+                    &stop.location.lng,
+                    &sstage,
+                    &(stop.service_seconds as i64),
+                ],
+            )
+            .await
+            .context("update stop")?;
+        }
+
+        tx.execute(
+            "DELETE FROM task_assignments WHERE task_id = $1",
+            &[&task.id],
+        )
+        .await
+        .context("clear assignments")?;
+        if let Some(assignee) = &task.assignee_id {
+            tx.execute(
+                "INSERT INTO task_assignments (task_id, driver_sub) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                &[&task.id, assignee],
+            )
+            .await
+            .context("assign task")?;
+        }
+
+        tx.commit().await.context("commit update_task")?;
+        Ok(())
     }
 
     // ---------- bootstrap ----------
@@ -459,6 +663,16 @@ impl PgStore {
                  SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM organizations WHERE id = $2) \
                  ON CONFLICT DO NOTHING",
                 &[&config.default_admin_sub, &config.default_org_id],
+            )
+            .await?;
+        // Without this the admin resolves an org but no hub, and
+        // `organization_and_hub_of` returns None for them.
+        client
+            .execute(
+                "INSERT INTO user_hubs (user_sub, hub_id) \
+                 SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM hubs WHERE id = $2) \
+                 ON CONFLICT DO NOTHING",
+                &[&config.default_admin_sub, &config.default_hub_id],
             )
             .await?;
         Ok(())

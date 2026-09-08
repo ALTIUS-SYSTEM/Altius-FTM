@@ -1,6 +1,6 @@
 # Altius FTM — Tenant Model
 
-> **Source:** Reverse-engineered from `app.paket.mile_field` v1.40.8  
+> **Product:** Altius FTM (Fleet & Transport Management)
 > **Date:** 2026-09-07  
 
 ---
@@ -47,14 +47,14 @@ Each level scopes data, configuration, and access:
 
 | Flavor | API Base | Web Origin | App Name | Special |
 |---|---|---|---|---|
-| **Prod** | `apiweb.mile.app` | `web.mile.app` | Mile Field | Standard production |
-| **Dev** | `apiwebdev.mile.app` | `webdev.mile.app` | Mile Field Dev | Development |
-| **Beta** | `apiwebbeta.mile.app` | `webbeta.mile.app` | Mile Field Beta | Beta testing |
-| **Sandbox** | `apiwebsandbox.mile.app` | `websandbox.mile.app` | Mile Field Sandbox | Testing/staging |
-| **Unilever** | `uliapiweb.mile.app` | `web.mile.app` | Mile Field | Unilever-dedicated API |
-| **Unilever Sandbox** | `apiwebsandbox.mile.app` | `web.mile.app` | Mile Field Sandbox | Unilever testing |
-| **Y3** | `apiweb.mile.app` | `web.mile.app` | Mile Field | Y3 branding (shared prod API) |
-| **Y3 Sandbox** | `apiwebsandbox.mile.app` | `websandbox.mile.app` | Mile Field Sandbox | Y3 testing |
+| **Prod** | `api.altius.example` | `app.altius.example` | Altius Field | Standard production |
+| **Dev** | `api-dev.altius.example` | `app-dev.altius.example` | Altius Field Dev | Development |
+| **Beta** | `api-beta.altius.example` | `app-beta.altius.example` | Altius Field Beta | Beta testing |
+| **Sandbox** | `api-sandbox.altius.example` | `app-sandbox.altius.example` | Altius Field Sandbox | Testing/staging |
+| **Unilever** | `api-enterprise.altius.example` | `app.altius.example` | Altius Field | Unilever-dedicated API |
+| **Unilever Sandbox** | `api-sandbox.altius.example` | `app.altius.example` | Altius Field Sandbox | Unilever testing |
+| **Y3** | `api.altius.example` | `app.altius.example` | Altius Field | Y3 branding (shared prod API) |
+| **Y3 Sandbox** | `api-sandbox.altius.example` | `app-sandbox.altius.example` | Altius Field Sandbox | Y3 testing |
 
 ### 2.2 Flavor Configuration
 
@@ -86,7 +86,7 @@ Each file contains:
 Flavor is selected at **compile time**. The Flutter build system produces separate APKs per flavor. The installed APK determines which API endpoint the app communicates with.
 
 Key observations:
-- **Unilever** has a dedicated API (`uliapiweb.mile.app`) but shares the production web app
+- **Unilever** has a dedicated API (`api-enterprise.altius.example`) but shares the production web app
 - **Y3** shares the production API and web app but has distinct branding (`y3_logo_purple2.png`)
 - **Sandbox** flavors point to sandbox APIs for testing
 
@@ -300,16 +300,16 @@ Login → Save token + user data
 
 ### 7.1 Unilever
 
-- **Dedicated API:** `uliapiweb.mile.app` (production)
-- **Dedicated base URL:** `unilever.mile.app` / `unileverdev.mile.app`
-- **Shared web app:** Uses `web.mile.app` (same as standard prod)
-- **Sandbox:** Uses standard sandbox API (`apiwebsandbox.mile.app`)
+- **Dedicated API:** `api-enterprise.altius.example` (production)
+- **Dedicated base URL:** `tenant-a.altius.example` / `tenant-a-dev.altius.example`
+- **Shared web app:** Uses `app.altius.example` (same as standard prod)
+- **Sandbox:** Uses standard sandbox API (`api-sandbox.altius.example`)
 - **Purpose:** Unilever-specific integrations and data isolation
 
 ### 7.2 Y3
 
-- **Shared API:** Uses standard production API (`apiweb.mile.app`)
-- **Shared web app:** Uses `web.mile.app`
+- **Shared API:** Uses standard production API (`api.altius.example`)
+- **Shared web app:** Uses `app.altius.example`
 - **Distinct branding:** `y3_logo_purple2.png`, purple color scheme
 - **Sandbox:** Uses standard sandbox API and web
 - **Purpose:** Y3-branded variant of the standard product
@@ -322,7 +322,7 @@ Login → Save token + user data
 
 ### 7.4 HMS (Road Hazard Awareness)
 
-- **URL:** `hmslms.mile.app` (prod) / `hmslmssandbox.mile.app` (sandbox)
+- **URL:** `lms.altius.example` (prod) / `lms-sandbox.altius.example` (sandbox)
 - **Feature:** `road_warning` — displays HMS e-learning content for road hazard awareness
 - **Integration:** External HMS LMS system for driver safety training
 
@@ -385,7 +385,7 @@ Login → Save token + user data
 | Permission system | `PermissionEntity`, `PermissionDetailEntity`, `RoleEntity` |
 | Permission enforcement | `noAddTaskPermission`, `noDoTaskPermission`, `noViewEntityDataPermission` messages |
 | Local data clearing | `RemoveLocalTaskDataUseCase`, `FailedToClearFlowData`, `FailedToClearCurrencyData` |
-| Unilever flavor | `dotEnvUnilever`, `UNILEVER_BASE_URL`, `uliapiweb.mile.app` |
+| Unilever flavor | `dotEnvUnilever`, `UNILEVER_BASE_URL`, `api-enterprise.altius.example` |
 | Y3 flavor | `dotEnvY3`, `y3_logo_purple2.png` |
 | Avian flag | `GetIsAvianFromLocalUseCase`, `is_avian` field |
 | HMS integration | `HMS_URL` in env files, `road_warning` feature |

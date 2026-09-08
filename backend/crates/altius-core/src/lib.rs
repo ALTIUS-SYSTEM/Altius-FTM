@@ -132,9 +132,21 @@ pub struct DeviceEvent {
 pub enum EventReceipt {
     Queued,
     Sending,
-    Accepted { server_event_id: Id },
-    Conflict { reason: String },
-    Rejected { reason: String },
+    /// `event_id` is the client id so receipts can be matched without relying on
+    /// batch order; `server_event_id` is the persisted row id (same on first
+    /// accept, same on idempotent replay).
+    Accepted {
+        event_id: Id,
+        server_event_id: Id,
+    },
+    Conflict {
+        event_id: Id,
+        reason: String,
+    },
+    Rejected {
+        event_id: Id,
+        reason: String,
+    },
 }
 
 // Must stay 1:1 with `ExpenseCategorySchema` in packages/api-contracts/src/lhs.ts

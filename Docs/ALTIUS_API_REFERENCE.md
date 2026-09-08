@@ -1,6 +1,6 @@
 # Altius FTM — API Endpoint Reference
 
-> **Source:** Reverse-engineered from `app.paket.mile_field` v1.40.8  
+> **Product:** Altius FTM (Fleet & Transport Management)
 > **Base URL:** `{BASE_URL}/api/v3`  
 > **Date:** 2026-09-07  
 
@@ -38,28 +38,28 @@
 
 | Flavor | Base URL | Web Origin | S3 Region |
 |---|---|---|---|
-| Production | `https://apiweb.mile.app/api/v3` | `https://web.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
-| Development | `https://apiwebdev.mile.app/api/v3` | `https://webdev.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
-| Beta | `https://apiwebbeta.mile.app/api/v3` | `https://webbeta.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
-| Sandbox | `https://apiwebsandbox.mile.app/api/v3` | `https://websandbox.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
-| Unilever | `https://uliapiweb.mile.app/api/v3` | `https://web.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
-| Unilever Sandbox | `https://apiwebsandbox.mile.app/api/v3` | `https://web.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
-| Y3 | `https://apiweb.mile.app/api/v3` | `https://web.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
-| Y3 Sandbox | `https://apiwebsandbox.mile.app/api/v3` | `https://websandbox.mile.app/` | `s3-ap-southeast-1.amazonaws.com` |
+| Production | `https://api.altius.example/api/v3` | `https://app.altius.example/` | `s3-ap-southeast-1.amazonaws.com` |
+| Development | `https://api-dev.altius.example/api/v3` | `https://app-dev.altius.example/` | `s3-ap-southeast-1.amazonaws.com` |
+| Beta | `https://api-beta.altius.example/api/v3` | `https://app-beta.altius.example/` | `s3-ap-southeast-1.amazonaws.com` |
+| Sandbox | `https://api-sandbox.altius.example/api/v3` | `https://app-sandbox.altius.example/` | `s3-ap-southeast-1.amazonaws.com` |
+| Unilever | `https://api-enterprise.altius.example/api/v3` | `https://app.altius.example/` | `s3-ap-southeast-1.amazonaws.com` |
+| Unilever Sandbox | `https://api-sandbox.altius.example/api/v3` | `https://app.altius.example/` | `s3-ap-southeast-1.amazonaws.com` |
+| Y3 | `https://api.altius.example/api/v3` | `https://app.altius.example/` | `s3-ap-southeast-1.amazonaws.com` |
+| Y3 Sandbox | `https://api-sandbox.altius.example/api/v3` | `https://app-sandbox.altius.example/` | `s3-ap-southeast-1.amazonaws.com` |
 
 ### HMS Integration
 
 | Environment | HMS URL |
 |---|---|
-| Production | `https://hmslms.mile.app/hms/elicense/road-hazard-awareness` |
-| Sandbox/Dev/Beta | `https://hmslmssandbox.mile.app/hms/elicense/road-hazard-awareness` |
+| Production | `https://lms.altius.example/hms/elicense/road-hazard-awareness` |
+| Sandbox/Dev/Beta | `https://lms-sandbox.altius.example/hms/elicense/road-hazard-awareness` |
 
 ### Unilever Integration
 
 | Environment | Unilever Base URL |
 |---|---|
-| Production | `https://unilever.mile.app` |
-| Dev/Sandbox | `https://unileverdev.mile.app` |
+| Production | `https://tenant-a.altius.example` |
+| Dev/Sandbox | `https://tenant-a-dev.altius.example` |
 
 ---
 
@@ -426,7 +426,7 @@ Get custom module detail.
 {
   "id": "module_id",
   "name": "Module Name",
-  "url": "https://custom.mile.app/module",
+  "url": "https://custom.altius.example/module",
   "icon": "icon_name"
 }
 ```
@@ -492,16 +492,16 @@ Get task list for main menu.
 
 ## 15. Media Upload API
 
-### POST /mile_images
+### POST /media/images
 Upload image file.
 
 **Request:** `multipart/form-data`
 - `file` — image file
 
-### POST /mile_files
+### POST /media/files
 Upload generic file.
 
-### POST /mile_images/troubleshooting/
+### POST /media/images/troubleshooting/
 Upload troubleshooting screenshot.
 
 ### POST /compressed/

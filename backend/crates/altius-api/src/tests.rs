@@ -56,6 +56,23 @@ async fn health_is_public() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    // Liveness only — must not advertise maps/agent/store backend posture.
+    assert_eq!(v["service"], "altius-api");
+    assert!(v.get("maps").is_none());
+    assert!(v.get("agent").is_none());
+    assert!(v.get("persistence").is_none());
+}
+
+#[tokio::test]
+async fn ready_fails_closed_without_store() {
+    let app = crate::routes::router().with_state(test_state());
+    let res = app
+        .oneshot(Request::get("/api/v3/ready").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]

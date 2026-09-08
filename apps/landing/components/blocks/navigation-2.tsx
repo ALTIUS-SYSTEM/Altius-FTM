@@ -16,8 +16,10 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
+import { webLoginUrl } from "@/lib/web-app";
 
 export function Navigation2() {
+  const loginHref = webLoginUrl();
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [dark, setDark] = useState(false);
@@ -159,14 +161,14 @@ export function Navigation2() {
                     {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
                   </button>
                   <a
-                    href="#"
+                    href={loginHref}
                     className="px-4 py-2 tracking-tight text-sm font-light text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white no-underline"
                     onMouseEnter={() => setActiveMenu(null)}
                   >
                     Log in
                   </a>
                   <a
-                    href="#cta"
+                    href={loginHref}
                     className="px-5 py-2 rounded-lg bg-[#00677e] dark:bg-white text-white dark:text-neutral-950 text-sm font-light tracking-tight hover:bg-[#005565] dark:hover:bg-neutral-200 no-underline"
                     onMouseEnter={() => setActiveMenu(null)}
                   >
@@ -271,7 +273,7 @@ export function Navigation2() {
                             Pricing
                           </a>
                           <a
-                            href="#"
+                            href={loginHref}
                             className="block py-2 px-2 text-sm font-medium text-neutral-600 dark:text-neutral-400 no-underline"
                           >
                             Log in
@@ -280,7 +282,7 @@ export function Navigation2() {
 
                         <div>
                           <a
-                            href="#cta"
+                            href={loginHref}
                             className="block w-full text-center px-6 py-2.5 rounded-full bg-[#00677e] dark:bg-white text-white dark:text-neutral-950 text-sm font-medium no-underline"
                           >
                             Start Dispatching

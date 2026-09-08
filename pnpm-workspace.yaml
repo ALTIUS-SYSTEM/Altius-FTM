@@ -3,3 +3,6 @@ packages:
   - apps/landing
   - packages/*
 minimumReleaseAge: 10080
+# Supply-chain hardening (pnpm ≥ 10.21 / 10.26).
+trustPolicy: no-downgrade
+blockExoticSubdeps: true

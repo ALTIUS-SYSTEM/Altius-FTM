@@ -5,7 +5,7 @@ import { createEmptyState } from "./model";
 export const STORAGE_KEY = "altius.web.demo.v1";
 export interface DemoAdapter {
   load(): Promise<DemoState>;
-  save(state: DemoState): void;
+  save(state: DemoState): void | Promise<void>;
   reset(): DemoState;
 }
 export const createLocalAdapter = (storage: Pick<Storage, "getItem" | "setItem" | "removeItem">): DemoAdapter => ({

@@ -17,9 +17,13 @@ class Strings {
     'driverApp': ['Your day. In motion.', 'Hari Anda. Terus bergerak.', 'ทุกวันของคุณ เดินหน้าต่อ', '今日も、前へ。', '每天，向前出发。', 'Ang araw mo. Tuloy ang biyahe.', 'Mỗi ngày. Luôn tiến bước.'],
     'demo': ['DEMO · Local device only', 'DEMO · Hanya di perangkat', 'DEMO · เฉพาะในอุปกรณ์', 'DEMO · この端末のみ', 'DEMO · 仅保存在设备', 'DEMO · Sa device lang', 'DEMO · Chỉ trên thiết bị'],
     'demoNotice': ['No real login, server sync or GPS tracking. Do not enter real credentials.', 'Tanpa login asli, sinkron server, atau pelacakan GPS. Jangan masukkan kredensial asli.', 'ไม่มีการเข้าสู่ระบบจริง ซิงค์เซิร์ฟเวอร์ หรือติดตาม GPS อย่าใช้รหัสผ่านจริง', '実際の認証・同期・GPS追跡はありません。本物の認証情報を入力しないでください。', '无真实登录、服务器同步或GPS跟踪。请勿输入真实凭据。', 'Walang totoong login, server sync o GPS tracking. Huwag gumamit ng tunay na password.', 'Không đăng nhập thật, đồng bộ máy chủ hay theo dõi GPS. Không nhập mật khẩu thật.'],
+    'liveNotice': ['Sign in with your Altius account. Tokens stay in secure device storage.', 'Masuk dengan akun Altius Anda. Token disimpan di penyimpanan aman perangkat.', 'ลงชื่อเข้าใช้ด้วยบัญชี Altius โทเค็นอยู่ในที่เก็บที่ปลอดภัยของอุปกรณ์', 'Altiusアカウントでサインインします。トークンは端末の安全な領域に保存されます。', '使用 Altius 账户登录。令牌保存在设备安全存储中。', 'Mag-sign in gamit ang Altius account. Ang mga token ay nasa secure storage.', 'Đăng nhập bằng tài khoản Altius. Token lưu trong bộ nhớ bảo mật thiết bị.'],
     'email': ['Demo email', 'Email demo', 'อีเมลสาธิต', 'デモメール', '演示邮箱', 'Demo email', 'Email demo'],
     'password': ['Demo password', 'Kata sandi demo', 'รหัสผ่านสาธิต', 'デモパスワード', '演示密码', 'Demo password', 'Mật khẩu demo'],
     'enter': ['Enter demo workspace', 'Masuk ruang kerja demo', 'เข้าสู่พื้นที่สาธิต', 'デモを開始', '进入演示工作区', 'Buksan ang demo', 'Vào không gian demo'],
+    'signIn': ['Sign in with Keycloak', 'Masuk dengan Keycloak', 'ลงชื่อเข้าใช้ด้วย Keycloak', 'Keycloakでサインイン', '使用 Keycloak 登录', 'Mag-sign in sa Keycloak', 'Đăng nhập bằng Keycloak'],
+    'useKeycloak': ['Use Keycloak instead', 'Gunakan Keycloak', 'ใช้ Keycloak แทน', 'Keycloakを使う', '改用 Keycloak', 'Gamitin ang Keycloak', 'Dùng Keycloak'],
+    'authConfigMissing': ['Enter API base, Keycloak issuer, client ID, and redirect URI.', 'Isi API base, issuer Keycloak, client ID, dan redirect URI.', 'กรอก API base, issuer Keycloak, client ID และ redirect URI', 'APIベース、Keycloak issuer、クライアントID、リダイレクトURIを入力してください。', '请填写 API 地址、Keycloak issuer、客户端 ID 和重定向 URI。', 'Ilagay ang API base, Keycloak issuer, client ID, at redirect URI.', 'Nhập API base, issuer Keycloak, client ID và redirect URI.'],
     'workspace': ['Workspace', 'Ruang kerja', 'พื้นที่ทำงาน', 'ワークスペース', '工作区', 'Workspace', 'Không gian làm việc'],
     'organization': ['Organization', 'Organisasi', 'องค์กร', '組織', '组织', 'Organisasyon', 'Tổ chức'],
     'hub': ['Hub', 'Hub', 'ศูนย์กระจายสินค้า', '拠点', '枢纽', 'Hub', 'Trung tâm'],
@@ -133,6 +137,7 @@ class Strings {
     'deliveryBody': 'Delivery instructions: confirm the shipment reference with the receiving contact. This demo records three steps only. Photo, signature, barcode and voice evidence are not collected.',
     'authHelp': 'Authentication preview',
     'authHelpBody': 'DEMO ONLY. OTP, cloud authenticator, password recovery and password changes require a real identity provider. No verification codes, emails or password changes are sent. Return to the demo login to continue.',
+    'authHelpLiveBody': 'Sign-in uses Keycloak authorization code + PKCE. Redirect URI must match the AppAuth registration (com.altius.altius_field:/oauthredirect). Tokens are stored in the device keystore/keychain, never in SQLite preferences.',
     'workspaceBody': 'Workspace labels are demonstration selectors; the four Jakarta fixture stops remain the same in every hub. Unsynced work prevents changing the workspace.',
   };
 }

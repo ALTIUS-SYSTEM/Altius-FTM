@@ -272,6 +272,7 @@ impl TypedbStore {
             // Return the *stored* event id, not the client's key, so both the
             // replay and the fresh path yield the same server-side identifier.
             return Ok(EventReceipt::Accepted {
+                event_id: ev.event_id.clone(),
                 server_event_id: v
                     .get("event")
                     .and_then(|s| s.as_str())
@@ -308,6 +309,7 @@ impl TypedbStore {
                     let Ok(from) = serde_json::from_str::<StopStatus>(&format!("\"{cur}\"")) else {
                         tx.rollback().await.ok();
                         return Ok(EventReceipt::Conflict {
+                            event_id: ev.event_id.clone(),
                             reason: format!("stop {stop_id} has unknown stage {cur:?}"),
                         });
                     };
@@ -316,6 +318,7 @@ impl TypedbStore {
                         Err(e) => {
                             tx.rollback().await.ok();
                             return Ok(EventReceipt::Conflict {
+                                event_id: ev.event_id.clone(),
                                 reason: e.to_string(),
                             });
                         }
@@ -328,6 +331,7 @@ impl TypedbStore {
             if !resolved {
                 tx.rollback().await.ok();
                 return Ok(EventReceipt::Conflict {
+                    event_id: ev.event_id.clone(),
                     reason: format!(
                         "stop {stop_id} is not part of task {} in this organization",
                         ev.task_id
@@ -392,20 +396,49 @@ impl TypedbStore {
             tx.query(&link).await.context("link stop + advance")?;
         }
 
-        // Roll the task stage forward when a stop departs.
-        if matches!(new_stage, Some(StopStatus::Departed)) {
+        // Roll the task stage forward on arrive and when every stop is terminal.
+        // Mobile ends at complete_activity; do not wait for a separate depart.
+        if matches!(
+            new_stage,
+            Some(StopStatus::Arrived | StopStatus::Working | StopStatus::Departed)
+        ) {
             let roll = format!(
                 r#"match
                     $o isa organization, has org-id "{org}";
                     allocation (org: $o, hub: $h);
                     located (task: $t, hub: $h);
                     $t has task-id "{tid}", has stage $old;
+                    $old == "assigned";
                 delete has $old of $t;
                 insert $t has stage "in_progress";"#,
                 org = Self::esc(org),
                 tid = Self::esc(&ev.task_id),
             );
             tx.query(&roll).await.context("advance task stage")?;
+        }
+        if matches!(
+            new_stage,
+            Some(StopStatus::Completed | StopStatus::Departed | StopStatus::Skipped)
+        ) {
+            let done = format!(
+                r#"match
+                    $o isa organization, has org-id "{org}";
+                    allocation (org: $o, hub: $h);
+                    located (task: $t, hub: $h);
+                    $t has task-id "{tid}", has stage $old;
+                    not {{
+                        contains (parent: $t, child: $s);
+                        $s isa stop, has stage $st;
+                        {{ $st == "pending"; }} or {{ $st == "arrived"; }} or {{ $st == "working"; }}
+                    }};
+                delete has $old of $t;
+                insert $t has stage "completed";"#,
+                org = Self::esc(org),
+                tid = Self::esc(&ev.task_id),
+            );
+            // Best-effort: if a stop is still open the match fails and we leave
+            // the task stage alone.
+            let _ = tx.query(&done).await;
         }
 
         // If the event carries an app GPS fix, mirror it as an observation for
@@ -466,12 +499,14 @@ impl TypedbStore {
             let text = e.to_string();
             if text.contains("request-key") || text.to_lowercase().contains("unique") {
                 return Ok(EventReceipt::Accepted {
+                    event_id: ev.event_id.clone(),
                     server_event_id: ev.event_id.clone(),
                 });
             }
             return Err(anyhow::Error::new(e).context("commit"));
         }
         Ok(EventReceipt::Accepted {
+            event_id: ev.event_id.clone(),
             server_event_id: ev.event_id.clone(),
         })
     }

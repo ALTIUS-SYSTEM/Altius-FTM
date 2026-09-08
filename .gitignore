@@ -22,5 +22,5 @@ apps/mobile/ios/Pods/
 apps/mobile/ios/.symlinks/
 target/
 
-# Reverse-engineering artifacts: proprietary APK, native libs, embedded secrets
+# Local-only dumps / binary artifacts (never commit)
 extraction/

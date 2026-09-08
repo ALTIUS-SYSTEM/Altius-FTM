@@ -4,13 +4,19 @@ import 'dart:io';
 import 'dart:math';
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:geolocator/geolocator.dart';
 import '../services/auth_service.dart';
 
 /// Where bearer credentials live. Backed by the platform keystore/keychain in
-/// production; the SQLite `preferences` table is app-private but unencrypted,
-/// so a stolen device, an unencrypted backup, or root access reads it directly.
+/// production — never the SQLite `preferences` table (F-06-01).
+///
+/// Operational field data (task addresses, GPS events, reports, costs) still
+/// lives in app-private unencrypted SQLite (F-06-05). A stolen unlocked device
+/// or root/jailbreak can read it. Mitigations today: tokens only in
+/// [FlutterSecureStorage], logout clears session/draft prefs, Android
+/// `allowBackup=false`. Full SQLCipher encryption is the remaining follow-up.
 abstract class TokenStore {
   Future<String> read(String key);
   Future<void> write(String key, String value);
@@ -19,7 +25,8 @@ abstract class TokenStore {
 
 class SecureTokenStore implements TokenStore {
   const SecureTokenStore();
-  static const _keys = ['accessToken', 'refreshToken', 'accessExpiresAt'];
+  // Must match [AuthService] token key names so logout clears the same slots.
+  static const _keys = ['accessToken', 'refreshToken', 'idToken', 'accessTokenExpiresAt'];
   static const _secure = FlutterSecureStorage(
     iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device),
   );
@@ -35,20 +42,28 @@ class SecureTokenStore implements TokenStore {
   }
 }
 
-/// Rejects anything that is not HTTPS with a host. A plain `http://` base sends
-/// the driver's password and every later bearer token in the clear.
+/// True for loopback hosts used by local docker-compose (Keycloak + API).
+bool _isLoopbackHost(String host) {
+  final h = host.toLowerCase();
+  return h == 'localhost' || h == '127.0.0.1' || h == '::1' || h == '[::1]';
+}
+
+/// Rejects non-HTTPS bases except loopback HTTP for local E2E.
+/// A plain `http://` base to a remote host would send bearer tokens in the clear.
 Uri parseServerUrl(String raw) {
   final uri = Uri.tryParse(raw.trim());
-  if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) {
+  if (uri == null || uri.host.isEmpty) {
     throw ArgumentError('invalidServer');
   }
-  return uri;
+  if (uri.scheme == 'https') return uri;
+  if (uri.scheme == 'http' && _isLoopbackHost(uri.host)) return uri;
+  throw ArgumentError('invalidServer');
 }
 
 enum TaskStage { assigned, arrived, working, done }
 
 class FieldTask {
-  const FieldTask(this.id, this.title, this.address, this.stage, this.etaMinutes, {this.lat, this.lng});
+  const FieldTask(this.id, this.title, this.address, this.stage, this.etaMinutes, {this.lat, this.lng, this.stopId});
   final String id;
   final String title;
   final String address;
@@ -58,6 +73,8 @@ class FieldTask {
   /// only an address until something geocodes it.
   final double? lat;
   final double? lng;
+  /// Server stop id used when pushing stage events. Null for local-only tasks.
+  final String? stopId;
   bool get isLocated => lat != null && lng != null;
 }
 
@@ -152,7 +169,7 @@ class VehicleCheck {
 class _Database extends GeneratedDatabase {
   _Database(super.executor);
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
   @override
   Iterable<TableInfo<Table, Object?>> get allTables => const [];
   @override
@@ -206,6 +223,9 @@ class _Database extends GeneratedDatabase {
     await customStatement("CREATE TRIGGER vehicle_checks_no_update BEFORE UPDATE ON vehicle_checks BEGIN SELECT RAISE(ABORT, 'immutable vehicle check'); END");
     await customStatement("CREATE TRIGGER vehicle_checks_no_delete BEFORE DELETE ON vehicle_checks BEGIN SELECT RAISE(ABORT, 'immutable vehicle check'); END");
   }
+  Future<void> _upgrade7() async {
+    await customStatement('ALTER TABLE tasks ADD COLUMN stop_id TEXT');
+  }
   @override
   MigrationStrategy get migration => MigrationStrategy(onCreate: (m) async {
     await customStatement('CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, address TEXT NOT NULL, stage INTEGER NOT NULL DEFAULT 0 CHECK(stage BETWEEN 0 AND 3), eta INTEGER NOT NULL)');
@@ -217,12 +237,14 @@ class _Database extends GeneratedDatabase {
     await _upgrade();
     await _upgrade3();
     await _upgrade4();
+    await _upgrade7();
   }, onUpgrade: (m, from, to) async {
     if (from < 2) { await _upgrade(); }
     if (from < 3) { await _upgrade3(); }
     if (from < 4) { await _upgrade4(); }
     if (from < 5) { await _upgrade5(); }
     if (from < 6) { await _upgrade6(); }
+    if (from < 7) { await _upgrade7(); }
   });
 }
 
@@ -296,8 +318,22 @@ class WorkStore {
     required String redirectUri,
   }) async {
     final url = parseServerUrl(apiBase).toString().replaceAll(RegExp(r'/+$'), '');
-    await _auth.configure(issuer: issuer, clientId: clientId, redirectUri: redirectUri, apiBase: url);
+    if (issuer.trim().isEmpty || clientId.trim().isEmpty || redirectUri.trim().isEmpty) {
+      throw StateError('authConfigMissing');
+    }
+    await _auth.configure(
+      issuer: issuer.trim(),
+      clientId: clientId.trim(),
+      redirectUri: redirectUri.trim(),
+      apiBase: url,
+    );
     await _pref('apiBase', url);
+  }
+
+  /// Local-only demo session (no IdP). Used when Keycloak is not configured.
+  Future<void> enterDemoWorkspace() async {
+    if (!demoWorkspace) throw StateError('authConfigMissing');
+    await _write(() => _pref('session', 'demo'));
   }
 
   /// Authenticate with Keycloak PKCE and hydrate the workspace from the API.
@@ -340,14 +376,72 @@ class WorkStore {
     await _write(() async {
       await _db.customStatement('DELETE FROM tasks');
       for (final t in tasks) {
-        await _db.customStatement('INSERT OR REPLACE INTO tasks (id,title,address,stage,eta,lat,lng) VALUES (?,?,?,?,?,?,?)', t);
+        await _db.customStatement('INSERT OR REPLACE INTO tasks (id,title,address,stage,eta,lat,lng,stop_id) VALUES (?,?,?,?,?,?,?,?)', t);
       }
       await _pref('apiBase', base);
       if (subject != null && subject.isNotEmpty) await _pref('driverId', subject);
       if (organization != null && organization.isNotEmpty) await _pref('organization', organization);
       if (hub != null && hub.isNotEmpty) await _pref('hub', hub);
+      await _ensureDeviceId();
       await _pref('session', 'true');
     });
+  }
+
+  /// Pull the server task list into local SQLite when authenticated.
+  /// Preserves in-flight local stage for tasks that already have pending events.
+  Future<int> pullTasks({required String baseUrl, required String accessToken}) =>
+      _write(() async {
+        final client = HttpClient();
+        try {
+          final tReq = await client.getUrl(Uri.parse('$baseUrl/api/v3/tasks'));
+          tReq.headers.set('authorization', 'Bearer $accessToken');
+          final tRes = await tReq.close().timeout(const Duration(seconds: 15));
+          final tBody = await tRes.transform(utf8.decoder).join();
+          if (tRes.statusCode != 200) {
+            throw HttpException('pull failed: ${tRes.statusCode}');
+          }
+          final tData = jsonDecode(tBody) as Map<String, dynamic>;
+          final org = (tData['meta'] as Map<String, dynamic>?)?['organization'] as String?;
+          if (org != null && org.isNotEmpty) await _pref('organization', org);
+          final rows = _parseTasks((tData['data'] as List?)?.cast<Map<String, dynamic>>() ?? const []);
+          final pendingEntities = (await _db
+                  .customSelect("SELECT DISTINCT entity FROM events WHERE delivery = 'pending'")
+                  .get())
+              .map((r) => r.read<String>('entity'))
+              .toSet();
+          final localById = {
+            for (final t in await tasks()) t.id: t,
+          };
+          await _db.customStatement('DELETE FROM tasks');
+          for (final row in rows) {
+            final id = row[0] as String;
+            // Keep the driver's unsynced local stage so a pull cannot rewind an
+            // arrival that is still sitting in the outbox.
+            if (pendingEntities.contains(id) && localById.containsKey(id)) {
+              final local = localById[id]!;
+              await _db.customStatement(
+                'INSERT OR REPLACE INTO tasks (id,title,address,stage,eta,lat,lng,stop_id) VALUES (?,?,?,?,?,?,?,?)',
+                [id, row[1], row[2], local.stage.index, row[4], row[5], row[6], row[7] ?? local.stopId],
+              );
+            } else {
+              await _db.customStatement(
+                'INSERT OR REPLACE INTO tasks (id,title,address,stage,eta,lat,lng,stop_id) VALUES (?,?,?,?,?,?,?,?)',
+                row,
+              );
+            }
+          }
+          return rows.length;
+        } finally {
+          client.close();
+        }
+      });
+
+  Future<String> _ensureDeviceId() async {
+    final existing = await preference('deviceId');
+    if (existing.isNotEmpty) return existing;
+    final id = 'device-${newRequestId()}';
+    await _pref('deviceId', id);
+    return id;
   }
 
   /// Coordinates arrive as numbers or numeric strings depending on the shape
@@ -357,28 +451,85 @@ class WorkStore {
     return (n != null && n.isFinite) ? n : null;
   }
 
+  /// Depth-bounded TypeDB `{ value: … }` / single-element array unwrap.
+  static Object? _leaf(Object? v, [int depth = 0]) {
+    if (depth >= 8 || v == null) return v;
+    if (v is Map && v.containsKey('value')) return _leaf(v['value'], depth + 1);
+    if (v is List && v.length == 1) return _leaf(v.first, depth + 1);
+    return v;
+  }
+
+  static String? _str(Object? v) {
+    final leaf = _leaf(v);
+    if (leaf == null) return null;
+    final s = leaf.toString();
+    return s.isEmpty ? null : s;
+  }
+
+  /// Accept both the Postgres envelope `{ task, stops }` and a flat task doc,
+  /// including TypeDB kebab attributes (`task-id`, `hub-id`, nested `stop`).
   List<List<Object?>> _parseTasks(List<Map<String, dynamic>> rows) {
     final out = <List<Object?>>[];
     for (final row in rows) {
-      final id = row['id'] as String? ?? '';
-      final title = row['title'] as String? ?? '';
-      final stops = (row['stops'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+      final taskNode = row['task'];
+      final Map<String, dynamic> root;
+      if (taskNode is Map<String, dynamic>) {
+        root = {
+          for (final e in taskNode.entries) e.key: _leaf(e.value),
+        };
+      } else {
+        root = {for (final e in row.entries) e.key: _leaf(e.value)};
+      }
+      final rawStops = row['stops'] ?? root['stops'];
+      final stops = <Map<String, dynamic>>[];
+      if (rawStops is List) {
+        for (final s in rawStops) {
+          if (s is! Map) continue;
+          final map = Map<String, dynamic>.from(s);
+          final inner = map['stop'];
+          if (inner is Map) {
+            stops.add({for (final e in Map<String, dynamic>.from(inner).entries) e.key: _leaf(e.value)});
+          } else {
+            stops.add({for (final e in map.entries) e.key: _leaf(e.value)});
+          }
+        }
+      }
+      final id = _str(root['id']) ?? _str(root['task-id']) ?? _str(root['task_id']) ?? '';
+      final title = _str(root['title']) ?? '';
       String address = '';
       var stage = TaskStage.assigned;
       double? lat;
       double? lng;
+      String? stopId;
       if (stops.isNotEmpty) {
         final stop = stops.firstWhere(
-          (s) => (s['stage'] as String?) != 'completed' && (s['stage'] as String?) != 'departed' && (s['stage'] as String?) != 'skipped',
+          (s) {
+            final st = _str(s['stage']) ?? _str(s['status']) ?? 'pending';
+            return st != 'completed' && st != 'departed' && st != 'skipped';
+          },
           orElse: () => stops.last,
         );
-        address = stop['address'] as String? ?? '';
-        stage = _mapStopStage(stop['stage'] as String? ?? 'pending');
-        lat = _finite(stop['latitude']);
-        lng = _finite(stop['longitude']);
+        address = _str(stop['address']) ?? _str(stop['name']) ?? '';
+        stage = _mapStopStage(_str(stop['stage']) ?? _str(stop['status']) ?? 'pending');
+        lat = _finite(stop['lat']) ?? _finite(stop['latitude']);
+        lng = _finite(stop['lng']) ?? _finite(stop['longitude']);
+        stopId = _str(stop['id']) ?? _str(stop['stop-id']) ?? _str(stop['stop_id']);
+        final loc = stop['location'];
+        if (loc is Map) {
+          lat ??= _finite(loc['lat']) ?? _finite(loc['latitude']);
+          lng ??= _finite(loc['lng']) ?? _finite(loc['longitude']);
+        }
       }
-      final eta = (row['eta_minutes'] as num?)?.toInt() ?? (stops.isNotEmpty ? (stops.first['eta_minutes'] as num?)?.toInt() ?? 0 : 0);
-      if (id.isNotEmpty) out.add([id, title, address, stage.index, eta, lat, lng]);
+      final eta = (root['eta_minutes'] as num?)?.toInt() ??
+          (stops.isNotEmpty ? (stops.first['eta_minutes'] as num?)?.toInt() ?? 0 : 0);
+      // Task-level stage from the server wins when the active stop is still pending.
+      final taskStage = _str(root['stage']) ?? _str(root['status']);
+      if (taskStage == 'completed' || taskStage == 'cancelled') {
+        stage = TaskStage.done;
+      } else if (taskStage == 'in_progress' && stage == TaskStage.assigned) {
+        // Keep assigned until a stop stage says otherwise.
+      }
+      if (id.isNotEmpty) out.add([id, title, address, stage.index, eta, lat, lng, stopId]);
     }
     return out;
   }
@@ -389,6 +540,10 @@ class WorkStore {
     'done' || 'completed' || 'departed' => TaskStage.done,
     _ => TaskStage.assigned,
   };
+
+  /// Test seam for the API task-envelope parser (Postgres + TypeDB shapes).
+  @visibleForTesting
+  List<List<Object?>> debugParseTasks(List<Map<String, dynamic>> rows) => _parseTasks(rows);
 
   Future<void> logout() async {
     await _auth.logout();
@@ -414,6 +569,7 @@ class WorkStore {
     r.read<String>('id'), r.read<String>('title'), r.read<String>('address'),
     TaskStage.values[r.read<int>('stage')], r.read<int>('eta'),
     lat: r.read<double?>('lat'), lng: r.read<double?>('lng'),
+    stopId: r.read<String?>('stop_id'),
   )).toList();
   Future<List<WorkEvent>> events() async => (await _db.customSelect('SELECT * FROM events ORDER BY rowid').get()).map(WorkEvent.new).toList();
   Future<List<CostEntry>> costs() async => (await _db.customSelect('SELECT * FROM costs ORDER BY rowid').get()).map(CostEntry.new).toList();
@@ -681,6 +837,8 @@ class WorkStore {
             .customSelect("SELECT * FROM events WHERE delivery = 'pending' ORDER BY rowid")
             .get();
         final events = pending.map(WorkEvent.new).toList();
+        final deviceId = await _ensureDeviceId();
+        final localTasks = {for (final t in await tasks()) t.id: t};
 
         var sent = 0;
         final batch = <Map<String, Object?>>[];
@@ -702,15 +860,16 @@ class WorkStore {
           final accuracyMeters = (gps != null && gps.isNotEmpty)
               ? (gps['accuracy'] as num?)?.toDouble()
               : null;
+          final stopId = localTasks[e.entity]?.stopId;
           batch.add({
             'event_id': e.id,
             'idempotency_key': e.requestKey ?? e.id,
             'tenant_id': await preference('organization'),
             'hub_id': await preference('hub'),
             'driver_id': await preference('driverId').then((v) => v.isEmpty ? 'demo-driver' : v),
-            'device_id': 'demo-device',
+            'device_id': deviceId,
             'task_id': e.entity,
-            'stop_id': null,
+            'stop_id': stopId,
             'action': action,
             'time': {
               'utc': e.utc.toUtc().toIso8601String(),
@@ -754,14 +913,13 @@ class WorkStore {
               if (entry is! Map<String, dynamic>) continue;
               final id = entry['event_id'] ?? entry['server_event_id'];
               if (id is! String || !byId.containsKey(id)) continue;
-              // Only the statuses the contract defines are terminal. Anything
-              // unrecognised ('retry', a missing key, a partial response) stays
-              // pending so the event is resent, rather than being silently
-              // dropped as 'rejected'.
+              // Terminal statuses clear the outbox. `conflict` is permanent for
+              // invalid transitions (retrying cannot help). Unknown statuses
+              // stay pending so a partial/weird response is resent.
               final raw = entry['status'];
               final status = raw == 'accepted'
                   ? 'accepted'
-                  : raw == 'rejected'
+                  : (raw == 'rejected' || raw == 'conflict')
                       ? 'rejected'
                       : null;
               if (status == null) continue;

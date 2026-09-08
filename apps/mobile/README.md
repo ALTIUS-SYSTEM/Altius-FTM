@@ -1,17 +1,44 @@
-# altius_field
+# Altius Field (mobile)
 
-A new Flutter project.
+Flutter driver app for Altius FTM. Offline-first SQLite with an immutable event outbox; Keycloak PKCE for live sign-in.
 
-## Getting Started
+## Auth / OAuth redirect (Android & iOS)
 
-This project is a starting point for a Flutter application.
+Canonical redirect URI (must match Keycloak client `altius-mobile`):
 
-A few resources to get you started if this is your first Flutter project:
+```text
+com.altius.altius_field:/oauthredirect
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+| Surface | Registration |
+|---|---|
+| Android | `RedirectUriReceiverActivity` intent-filter: scheme `com.altius.altius_field`, path `/oauthredirect` |
+| iOS | `CFBundleURLSchemes` → `com.altius.altius_field` in `ios/Runner/Info.plist` |
+| Dart | `--dart-define=KEYCLOAK_REDIRECT_URI=...` (default above) |
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+**Why Android exports the redirect activity:** Custom-scheme OAuth returns through the browser as a `VIEW`/`BROWSABLE` intent. The receiver must be `android:exported="true"` or Keycloak PKCE cannot complete. Integrity is enforced by PKCE (`code_verifier` stays on-device), not by hiding the activity. Do not set `exported="false"` on `RedirectUriReceiverActivity`.
+
+`MainActivity` is also exported for `MAIN`/`LAUNCHER` only (required on API 31+); it is not a deep-link surface.
+
+## Live vs demo
+
+```bash
+# Demo (local SQLite fixtures; no IdP)
+flutter run -t lib/main_dev.dart
+
+# Live Keycloak + API
+flutter run -t lib/main_dev.dart \
+  --dart-define=API_BASE=http://127.0.0.1:8080 \
+  --dart-define=KEYCLOAK_ISSUER=http://127.0.0.1:8081/realms/altius \
+  --dart-define=KEYCLOAK_CLIENT_ID=altius-mobile \
+  --dart-define=KEYCLOAK_REDIRECT_URI=com.altius.altius_field:/oauthredirect
+```
+
+Production entrypoint (`lib/main_prod.dart`) requires Keycloak configuration (`demoWorkspace: false`).
+
+## Quality
+
+```bash
+flutter analyze
+flutter test
+```

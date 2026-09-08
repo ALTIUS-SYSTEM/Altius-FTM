@@ -20,6 +20,9 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # ---------- build ----------
 FROM node:22.14-bookworm-slim AS build
 ENV NEXT_TELEMETRY_DISABLED=1
+# Inlined at build time into landing CTAs (Log in / Start Dispatching).
+ARG NEXT_PUBLIC_WEB_APP_URL=http://127.0.0.1:3000
+ENV NEXT_PUBLIC_WEB_APP_URL=$NEXT_PUBLIC_WEB_APP_URL
 WORKDIR /src
 RUN corepack enable
 COPY --from=deps /src/node_modules ./node_modules

@@ -50,5 +50,15 @@ cargo test --workspace
 - `CORS_ORIGINS` — comma-separated allowlist; empty denies all cross-origin calls.
 - Security headers on every response: `nosniff`, `frame DENY`, `referrer-policy`, `default-src 'none'`.
 - 2 MiB request-body limit; graceful shutdown on SIGINT/SIGTERM.
-- Per-IP rate limiting belongs at the edge/LB.
+- Per-IP rate limiting belongs at the edge/LB (see root `Caddyfile`).
 - Maps calls are client-paced at ~50 QPS per key and retried on 429/5xx (pattern from `google-maps-services-java`).
+
+### Stage / production checklist
+
+1. **Secrets** — copy `.env.example` → `.env`; set real `KEYCLOAK_*`, `DATABASE_URL`, optional maps/agent keys. Never commit `.env`.
+2. **Postgres TLS** — managed DB must use `DATABASE_URL=...?...&sslmode=require` (or `?sslmode=require`). Local compose stays cleartext (`disable`/`prefer`/omitted).
+3. **CORS** — set `CORS_ORIGINS` to the exact dashboard/landing origins (no wildcards).
+4. **Keycloak** — public issuer URLs for browsers; internal `KEYCLOAK_JWKS_URL` / `KEYCLOAK_TOKEN_URL` when containers cannot reach the public host.
+5. **Edge TLS** — set `ALTIUS_DOMAIN` for the Caddy site block (auto ACME). Leave unset for local `:80` only. Caddy `/healthz` is edge liveness; app readiness is `GET /api/v3/ready` (503 when persistence is down).
+6. **Password grant** — keep `ALLOW_PASSWORD_GRANT=false` outside trusted private frontends.
+7. **Verify** — `curl -f https://$ALTIUS_DOMAIN/api/v3/ready` (or `http://localhost:8080/api/v3/ready` behind compose).

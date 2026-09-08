@@ -12,6 +12,30 @@
  ],
  "findings": [
   {
+   "id": "F-06-08",
+   "file": "apps/mobile/android/app/src/main/AndroidManifest.xml",
+   "line": 44,
+   "category": "improper-export",
+   "severity": "LOW",
+   "confidence": 0.9,
+   "title": "AppAuth RedirectUriReceiverActivity must stay exported for Keycloak PKCE (CWE-926)",
+   "status": "accepted-risk",
+   "remediation": "exported=true is required for custom-scheme OAuth redirects from the browser/Custom Tabs. Mitigations: PKCE (code_verifier on-device), intent-filter limited to scheme com.altius.altius_field + path /oauthredirect, tools:node=replace so the library cannot widen the filter, excludeFromRecents/noHistory, documented in apps/mobile/README.md. Do not set exported=false. HTTPS App Links are a follow-up deploy task; nosemgrep annotation on the activity documents the accepted risk for CI scanners.",
+   "disposition": "mitigated"
+  },
+  {
+   "id": "F-06-09",
+   "file": "apps/mobile/ios/Runner/Info.plist",
+   "line": 3,
+   "category": "transport-pinning",
+   "severity": "LOW",
+   "confidence": 0.4,
+   "title": "ATS does not pin SPKI; relies on system CA store (Semgrep ATS-consider-pinning)",
+   "status": "accepted-risk",
+   "remediation": "Public-key pinning needs production TLS cert inventory and rotation process. Defer until stage/prod hosts and certs are fixed; Keycloak and API use standard TLS with system trust for now.",
+   "disposition": "accepted-risk"
+  },
+  {
    "id": "F-07-11",
    "file": "packages/algos/src/index.ts",
    "line": 89,
@@ -757,12 +781,12 @@
   }
  ],
  "summary": {
-  "total": 62,
+  "total": 64,
   "high": 16,
   "medium": 25,
-  "low": 21,
+  "low": 23,
   "fixed": 55,
-  "partial": 3,
-  "open": 4
+  "partial": 4,
+  "open": 1
  }
 }

@@ -1,6 +1,6 @@
 # Altius FTM — Pseudocode
 
-> **Source:** Reverse-engineered from `app.paket.mile_field` v1.40.8  
+> **Product:** Altius FTM (Fleet & Transport Management)
 > **Date:** 2026-09-07  
 
 ---
@@ -774,7 +774,7 @@ function scanQRForLogin():
     loginToken = parseQRCode(qrCode)
     
     // Send token to backend to authenticate web session
-    response = loginMileWithToken(loginToken)
+    response = loginWithToken(loginToken)
     
     if response.success:
         showSuccess("Web login successful")

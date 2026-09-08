@@ -66,13 +66,15 @@ export async function startLogin(cfg: AuthConfig, redirectUri: string) {
   window.location.assign(`${endpoints(cfg).authorize}?${params}`);
 }
 
-/** Exchange the authorization code for tokens. Call once on the callback. */
+/** Exchange the authorization code for tokens. Call once on the callback.
+ * Returns the access token so the callback can read claims without
+ * re-reading storage (tokens are memory-only). */
 export async function finishLogin(
   cfg: AuthConfig,
   code: string,
   redirectUri: string,
   returnedState: string | null,
-): Promise<void> {
+): Promise<string> {
   const verifier = sessionStorage.getItem(STORAGE.verifier);
   const expectedState = sessionStorage.getItem(STORAGE.state);
   try {
@@ -80,7 +82,7 @@ export async function finishLogin(
       throw new Error("Login session missing — restart the login");
     if (!returnedState || returnedState !== expectedState)
       throw new Error("Login state mismatch — restart the login");
-    await exchangeCode(cfg, code, redirectUri, verifier);
+    return await exchangeCode(cfg, code, redirectUri, verifier);
   } finally {
     // One-shot values: clear on success and on every failure, so an abandoned
     // login cannot leave a live verifier for a forced callback to spend.
@@ -94,7 +96,7 @@ async function exchangeCode(
   code: string,
   redirectUri: string,
   verifier: string,
-): Promise<void> {
+): Promise<string> {
   const res = await fetch(endpoints(cfg).token, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -107,7 +109,13 @@ async function exchangeCode(
     }),
   });
   if (!res.ok) throw new Error(`token exchange failed: ${res.status}`);
-  await storeTokens(await res.json());
+  const body = (await res.json()) as {
+    access_token: string;
+    refresh_token?: string;
+    expires_in: number;
+  };
+  storeTokens(body);
+  return body.access_token;
 }
 
 const MS_PER_SECOND = 1000;
@@ -141,6 +149,9 @@ const storeTokens = (t: {
 
 /** True when a live session exists; the route guard needs this, not a flag. */
 export const hasSession = () => tokens !== null;
+
+/** Current access token without refresh — for display/claims after login. */
+export const peekAccessToken = () => tokens?.access ?? null;
 
 async function refreshTokens(cfg: AuthConfig): Promise<string | null> {
   const refresh = tokens?.refresh;

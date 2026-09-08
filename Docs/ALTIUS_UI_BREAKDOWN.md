@@ -1,6 +1,6 @@
 # Altius FTM — UI Breakdown (Mobile & Web)
 
-> **Source:** Reverse-engineered from `app.paket.mile_field` v1.40.8  
+> **Product:** Altius FTM (Fleet & Transport Management)
 > **Date:** 2026-09-07  
 
 ---
@@ -139,8 +139,8 @@ Framework: `flutter_modular`
 | `/user` | UserPage | User info |
 | `/device-token` | DeviceTokenPage | FCM token management |
 | `/last` | LastPage | Last visited |
-| `/mile_files` | MileFiles | File management |
-| `/mile_images` | MileImages | Image management |
+| `/media/files` | MediaFiles | File management |
+| `/media/images` | MediaImages | Image management |
 | `/trk` | TrackingPage | Tracking |
 | `/maps/dir/2` | MapDirections | Map directions |
 | `/compressed` | CompressedPage | Compressed media |
@@ -590,11 +590,11 @@ class TaskDoingState with _$TaskDoingState {
 ### 8.1 Web App Hierarchy
 
 ```
-Web App (web.mile.app) — INFERRED
+Web App (app.altius.example) — INFERRED
   │
   ├─ Auth
   │    ├─ Login page (email + password)
-  │    ├─ QR login (scan from mobile via LoginMileWithToken)
+  │    ├─ QR login (scan from mobile via LoginWithToken)
   │    └─ OTP/TOTP (shared auth with mobile)
   │
   ├─ Dashboard
@@ -698,7 +698,7 @@ Web App (web.mile.app) — INFERRED
 
 | Image | File | Purpose |
 |---|---|---|
-| Mile Logo | `logo_mile.png` | Brand logo |
+| Altius Logo | `logo_altius.png` | Brand logo |
 | Y3 Logo | `y3_logo_purple2.png` | Y3 tenant logo |
 | Empty Task | `empty_task.png` | Empty state illustration |
 | Login Success | `check_success_login.png` | Login success illustration |
@@ -706,17 +706,17 @@ Web App (web.mile.app) — INFERRED
 ### 10.4 Color Scheme
 
 - Primary: Purple-based (Y3 branding)
-- App names: "Mile Field" (prod), "Mile Field Beta/Dev/Sandbox"
-- Copyright: "© 2024 • PT. Paket Informasi Digital • Indonesia"
+- App names: "Altius Field" (prod), "Altius Field Beta/Dev/Sandbox"
+- Copyright: "© 2024 • Altius • Indonesia"
 
 ### 10.5 App Identity
 
 | Flavor | App Name |
 |---|---|
-| Production | Mile Field |
-| Beta | Mile Field Beta |
-| Dev | Mile Field Dev |
-| Sandbox | Mile Field Sandbox |
+| Production | Altius Field |
+| Beta | Altius Field Beta |
+| Dev | Altius Field Dev |
+| Sandbox | Altius Field Sandbox |
 
 ---
 

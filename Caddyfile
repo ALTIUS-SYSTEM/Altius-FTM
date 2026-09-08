@@ -66,6 +66,24 @@
 		reverse_proxy api:8080
 	}
 
+	# Keycloak: OIDC endpoints + login theme assets. Browsers hit these for
+	# the PKCE redirect, so they must be public on the same TLS domain.
+	# /admin, /metrics, and /health are deliberately NOT proxied — reach the
+	# admin console via `ssh -L 8081:localhost:8081` instead.
+	handle /realms/* {
+		rate_limit {
+			zone kc {
+				key {remote_host}
+				events 60
+				window 1m
+			}
+		}
+		reverse_proxy keycloak:8081
+	}
+	handle /resources/* {
+		reverse_proxy keycloak:8081
+	}
+
 	handle /landing/* {
 		uri strip_prefix /landing
 		reverse_proxy landing:3000

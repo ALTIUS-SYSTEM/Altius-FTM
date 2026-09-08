@@ -13,7 +13,8 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json"] }
-jsonwebtoken = "9"
+# 10.3+ required for CVE-2026-25537 (exp/nbf type-confusion bypass).
+jsonwebtoken = { version = "10.3", default-features = false, features = ["rust_crypto"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -27,6 +28,8 @@ gcp_auth = "0.12"
 prometheus = "0.14"
 tokio-postgres = "0.7"
 deadpool-postgres = "0.14"
+tokio-postgres-rustls = { version = "0.14", features = ["ring", "webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 postgres-types = { version = "0.2", features = ["with-serde_json-1", "with-chrono-0_4", "with-uuid-1"] }
 refinery = { version = "0.9", features = ["tokio-postgres"] }
 

@@ -34,7 +34,15 @@ impl Fixture {
             .ok()
             .filter(|u| !u.is_empty())?;
         let pool = crate::store::pg::connect(&url).await.ok()?;
-        crate::store::pg::migrate(&pool).await.ok()?;
+        // Serialize migrations across parallel fixtures and fail loudly:
+        // a migration error must kill the test, not skip it.
+        static MIGRATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        {
+            let _guard = MIGRATE_LOCK.lock().await;
+            crate::store::pg::migrate(&pool)
+                .await
+                .expect("migrate test database");
+        }
         Some(Self {
             store: Store::Postgres(PgStore::new(pool.clone())),
             pool,
@@ -265,20 +273,46 @@ async fn create_task_and_record_event() {
         .expect("replay event");
     match (receipt, replay) {
         (
-            EventReceipt::Accepted { server_event_id: a },
-            EventReceipt::Accepted { server_event_id: b },
+            EventReceipt::Accepted {
+                server_event_id: a, ..
+            },
+            EventReceipt::Accepted {
+                server_event_id: b, ..
+            },
         ) => assert_eq!(a, b),
         _ => panic!("expected accepted receipts"),
     }
 
     // The stop advanced to `arrived`.
-    let fetched = fx
+    let mut fetched = fx
         .store()
         .task_by_id(&org, &t.id)
         .await
         .expect("fetch task")
         .unwrap();
     assert_eq!(fetched["stops"][0]["stage"], "arrived");
+    assert_eq!(fetched["task"]["stage"], "in_progress");
+
+    // Null stop_id resolves to the active stop (mobile single-stop clients).
+    let ev2 = event(
+        &uniq("ev2"),
+        &org,
+        &hub,
+        &t.id,
+        None,
+        StopAction::StartActivity,
+    );
+    fx.store()
+        .record_event(&org, &driver, &ev2)
+        .await
+        .expect("record without stop_id");
+    fetched = fx
+        .store()
+        .task_by_id(&org, &t.id)
+        .await
+        .expect("fetch task")
+        .unwrap();
+    assert_eq!(fetched["stops"][0]["stage"], "working");
 }
 
 #[tokio::test]
@@ -540,8 +574,10 @@ async fn push_tokens_and_mceasy_sync() {
     fx.seed_org(&org, &hub).await;
     fx.seed_driver(&org, &hub, &driver).await;
 
+    // Device ids must be unique per test — fixtures share the database.
+    let device = uniq("dev");
     fx.store()
-        .register_push_token(&driver, "dev-1", "fcm-token-1")
+        .register_push_token(&driver, &device, "fcm-token-1")
         .await
         .expect("register token");
     assert_eq!(
@@ -557,7 +593,7 @@ async fn push_tokens_and_mceasy_sync() {
     fx.seed_driver(&org, &hub, &other).await;
     assert!(
         fx.store()
-            .register_push_token(&other, "dev-1", "fcm-token-2")
+            .register_push_token(&other, &device, "fcm-token-2")
             .await
             .is_err()
     );

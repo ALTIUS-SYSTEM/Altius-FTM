@@ -1,8 +1,14 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <application
         android:label="altius_field"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false">
+        <!--
+          MAIN/LAUNCHER must be exported on Android 12+ (API 31).
+          This is not a deep-link surface; it only starts the app from the launcher.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -25,17 +31,30 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <!-- AppAuth redirect handler for Keycloak PKCE -->
+        <!--
+          AppAuth OAuth redirect (Keycloak PKCE).
+          CWE-926: exported=true is required so the system browser / Custom Tabs can
+          deliver VIEW+BROWSABLE intents for the custom-scheme redirect. Do not set
+          exported=false — that breaks sign-in. Integrity control is PKCE
+          (code_verifier never leaves the app); the filter is scoped to this app's
+          scheme and /oauthredirect path only (no host — URI is
+          com.altius.altius_field:/oauthredirect). tools:node=replace prevents the
+          AppAuth library manifest from widening this filter.
+          nosemgrep: java.android.security.exported_activity.exported_activity
+        -->
         <activity
             android:name="net.openid.appauth.RedirectUriReceiverActivity"
             android:exported="true"
-            tools:node="replace"
-            xmlns:tools="http://schemas.android.com/tools">
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            tools:node="replace">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="com.altius.altius_field" android:path="/oauthredirect"/>
+                <data
+                    android:scheme="com.altius.altius_field"
+                    android:path="/oauthredirect"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

@@ -118,7 +118,9 @@ impl Jwks {
         validation.set_audience(&[&self.config.audience]);
         validation.validate_exp = true;
         // jsonwebtoken defaults validate_nbf to false, so a post-dated token
-        // would be accepted the moment it is minted.
+        // would be accepted the moment it is minted. Keep nbf optional (Keycloak
+        // often omits it); jsonwebtoken ≥ 10.3 rejects a malformed typed nbf
+        // instead of treating FailedToParse as absent (CVE-2026-25537).
         validation.validate_nbf = true;
         validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
 

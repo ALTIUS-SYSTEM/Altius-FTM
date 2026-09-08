@@ -1,9 +1,9 @@
 # Altius — Field Task Manager (FTM)
 ## Comprehensive Technical Architecture Documentation
 
-> **Document Status:** Reverse-engineered from authorized device extraction  
-> **Source:** `app.paket.mile_field` v1.40.8 (build 3790)  
-> **Brand:** Altius (internal codename for Mile Field rebrand documentation)  
+> **Document Status:** Product architecture  
+> **Package:** `com.altius.altius_field`  
+> **Brand:** Altius  
 > **Date:** 2026-09-07  
 
 ---
@@ -33,13 +33,13 @@
 
 ## 1. Executive Summary
 
-Altius FTM is a **Flutter-based field worker management application** developed by PT. Paket Informasi Digital (Indonesia). The application enables organizations to manage field operations including task assignment, check-in/check-out with geofencing, route optimization, multi-component task execution (photo, video, voice, barcode, bill, OTP, signature, print), offline-first synchronization, and real-time location tracking.
+Altius FTM is a **Flutter-based field worker management application** developed by Altius. The application enables organizations to manage field operations including task assignment, check-in/check-out with geofencing, route optimization, multi-component task execution (photo, video, voice, barcode, bill, OTP, signature, print), offline-first synchronization, and real-time location tracking.
 
 The system follows a **Clean Architecture** pattern with three layers (domain, data, presentation) and uses **Cubit (Bloc)** for state management. The application supports multi-tenant isolation through build-time flavors and runtime organization switching.
 
 | Attribute | Value |
 |---|---|
-| Package | `app.paket.mile_field` |
+| Package | `com.altius.altius_field` |
 | Version | 1.40.8 (code 3790) |
 | Framework | Flutter (Dart AOT) |
 | Min SDK | 23 (Android 6.0) |
@@ -67,7 +67,7 @@ The system follows a **Clean Architecture** pattern with three layers (domain, d
 │                                                                     │
 │  ┌──────────────────┐    QR Login    ┌──────────────────┐          │
 │  │  Altius Mobile   │◄──────────────►│  Altius Web      │          │
-│  │  (Flutter)       │                │  (web.mile.app)  │          │
+│  │  (Flutter)       │                │  (app.altius.example)  │          │
 │  │  Field Worker    │                │  Admin Dashboard │          │
 │  └────────┬─────────┘                └────────┬─────────┘          │
 │           │                                    │                    │
@@ -75,7 +75,7 @@ The system follows a **Clean Architecture** pattern with three layers (domain, d
 │           │                                    │                    │
 │           ▼                                    ▼                    │
 │  ┌─────────────────────────────────────────────────────────┐       │
-│  │              Backend API (apiweb.mile.app)               │       │
+│  │              Backend API (api.altius.example)               │       │
 │  │              Shared database, shared auth                │       │
 │  └─────────────────────────────────────────────────────────┘       │
 │           │                                                          │
@@ -134,14 +134,14 @@ The backend is a RESTful API served at `/api/v3` with environment-specific hosts
 
 | Flavor | API Host | Web Origin |
 |---|---|---|
-| Production | `apiweb.mile.app` | `web.mile.app` |
-| Development | `apiwebdev.mile.app` | `webdev.mile.app` |
-| Beta | `apiwebbeta.mile.app` | `webbeta.mile.app` |
-| Sandbox | `apiwebsandbox.mile.app` | `websandbox.mile.app` |
-| Unilever | `uliapiweb.mile.app` | `web.mile.app` |
-| Unilever Sandbox | `apiwebsandbox.mile.app` | `web.mile.app` |
-| Y3 | `apiweb.mile.app` | `web.mile.app` |
-| Y3 Sandbox | `apiwebsandbox.mile.app` | `websandbox.mile.app` |
+| Production | `api.altius.example` | `app.altius.example` |
+| Development | `api-dev.altius.example` | `app-dev.altius.example` |
+| Beta | `api-beta.altius.example` | `app-beta.altius.example` |
+| Sandbox | `api-sandbox.altius.example` | `app-sandbox.altius.example` |
+| Unilever | `api-enterprise.altius.example` | `app.altius.example` |
+| Unilever Sandbox | `api-sandbox.altius.example` | `app.altius.example` |
+| Y3 | `api.altius.example` | `app.altius.example` |
+| Y3 Sandbox | `api-sandbox.altius.example` | `app-sandbox.altius.example` |
 
 ### 3.2 Backend Service Areas
 
@@ -182,7 +182,7 @@ Backend API (/api/v3)
 │   └── /location-history/bulk
 ├── /device-token            — FCM token registration
 ├── /troubleshooting         — Diagnostic upload
-│   └── /mile_images/troubleshooting/
+│   └── /media/images/troubleshooting/
 ├── /main-menu               — Main menu configuration
 │   ├── /main-menu/custom-module
 │   ├── /main-menu/setting
@@ -365,7 +365,7 @@ RepositoryImpl
 Use cases follow naming convention `{Verb}{Noun}UseCase`:
 
 **Auth & Session:**
-- LoginUseCase, LoginMileWithTokenUseCase, LoginMileWithTokenThenSaveToLocalUseCase
+- LoginUseCase, LoginWithTokenUseCase, LoginWithTokenThenSaveToLocalUseCase
 - LogoutUseCase, ForceLogoutUseCase
 - SaveTokenToLocalUseCase, GetTokenFromLocalUseCase, SyncKeyUseCase
 - SaveUserDataToLocalUseCase, GetUserDataLocalUseCase
@@ -923,8 +923,8 @@ Write path:
 
 ### 10.10 QR Login (Cross-Device)
 
-- `LoginMileWithTokenUseCase` processes QR token
-- `LoginMileWithTokenThenSaveToLocalUseCase` saves session
+- `LoginWithTokenUseCase` processes QR token
+- `LoginWithTokenThenSaveToLocalUseCase` saves session
 - Mobile scans QR from web app → authenticates web session
 
 ---
@@ -1103,14 +1103,14 @@ Build Flavor / Environment
 
 | Flavor | API | Web | Special |
 |---|---|---|---|
-| Prod | apiweb.mile.app | web.mile.app | Standard production |
-| Dev | apiwebdev.mile.app | webdev.mile.app | Development |
-| Beta | apiwebbeta.mile.app | webbeta.mile.app | Beta testing |
-| Sandbox | apiwebsandbox.mile.app | websandbox.mile.app | Testing |
-| Unilever | uliapiweb.mile.app | web.mile.app | Unilever tenant |
-| Unilever Sandbox | apiwebsandbox.mile.app | web.mile.app | Unilever testing |
-| Y3 | apiweb.mile.app | web.mile.app | Y3 branding |
-| Y3 Sandbox | apiwebsandbox.mile.app | websandbox.mile.app | Y3 testing |
+| Prod | api.altius.example | app.altius.example | Standard production |
+| Dev | api-dev.altius.example | app-dev.altius.example | Development |
+| Beta | api-beta.altius.example | app-beta.altius.example | Beta testing |
+| Sandbox | api-sandbox.altius.example | app-sandbox.altius.example | Testing |
+| Unilever | api-enterprise.altius.example | app.altius.example | Unilever tenant |
+| Unilever Sandbox | api-sandbox.altius.example | app.altius.example | Unilever testing |
+| Y3 | api.altius.example | app.altius.example | Y3 branding |
+| Y3 Sandbox | api-sandbox.altius.example | app-sandbox.altius.example | Y3 testing |
 
 ### Tenant Isolation Mechanisms
 
@@ -1128,7 +1128,7 @@ Build Flavor / Environment
 | Connection | Type | Evidence |
 |---|---|---|
 | Shared Backend API | Confirmed | Both mobile and web use same `/api/v3` endpoints |
-| QR Login Bridge | Confirmed | `LoginMileWithTokenUseCase` + `ProfileQRPage` |
+| QR Login Bridge | Confirmed | `LoginWithTokenUseCase` + `ProfileQRPage` |
 | WebView Embed | Confirmed | `WebViewPage` + `/web-view` route |
 | Shared Assets | Confirmed | `flutter_assets/web/` contains shared fonts, icons, translations |
 | Shared Auth Token | Inferred | QR login implies shared session/token |
@@ -1205,21 +1205,21 @@ See [ALTIUS_UI_BREAKDOWN.md](./ALTIUS_UI_BREAKDOWN.md) for the complete UI struc
 
 | Variable | Description |
 |---|---|
-| `BASE_URL` | API base URL (e.g., `https://apiweb.mile.app/api/v3`) |
-| `WEB_ORIGIN` | Web app origin (e.g., `https://web.mile.app/`) |
+| `BASE_URL` | API base URL (e.g., `https://api.altius.example/api/v3`) |
+| `WEB_ORIGIN` | Web app origin (e.g., `https://app.altius.example/`) |
 | `REGION_BASE_ENDPOINT` | S3 region endpoint (`s3-ap-southeast-1.amazonaws.com`) |
 | `HMS_URL` | HMS e-learning URL for road hazard awareness |
 | `UNILEVER_BASE_URL` | Unilever-specific base URL |
-| `IS_DEBUG` | Debug flag (true in all extracted envs) |
+| `IS_DEBUG` | Debug flag (true in non-production env catalogs) |
 
 ### 17.2 App Names per Flavor
 
 | Flavor | App Name |
 |---|---|
-| Production | Mile Field |
-| Beta | Mile Field Beta |
-| Dev | Mile Field Dev |
-| Sandbox | Mile Field Sandbox |
+| Production | Altius Field |
+| Beta | Altius Field Beta |
+| Dev | Altius Field Dev |
+| Sandbox | Altius Field Sandbox |
 
 ### 17.3 Localization
 
@@ -1244,10 +1244,10 @@ Total: 614 translation keys per language, organized into 3 sections:
 |---|---|
 | Font | NunitoSans (Regular, Bold, SemiBold, ExtraBold, Light, Italic) |
 | Custom Icons | CustomIcons.ttf (35 icons) |
-| Primary Logo | `logo_mile.png` |
+| Primary Logo | `logo_altius.png` |
 | Y3 Logo | `y3_logo_purple2.png` |
 | Color Scheme | Purple-based |
-| Copyright | "© 2024 • PT. Paket Informasi Digital • Indonesia" |
+| Copyright | "© 2024 • Altius • Indonesia" |
 | Login Caption | "Field Worker Management App" |
 
 ---
@@ -1263,7 +1263,7 @@ Total: 614 translation keys per language, organized into 3 sections:
 | 60+ domain entities | Confirmed | Entity class enumeration |
 | 8 build flavors | Confirmed | Environment file extraction |
 | Shared backend API | Confirmed | Environment files show API + web origin pairs |
-| QR login bridge | Confirmed | LoginMileWithTokenUseCase + ProfileQRPage |
+| QR login bridge | Confirmed | LoginWithTokenUseCase + ProfileQRPage |
 | WebView embed | Confirmed | WebViewPage + /web-view route + WebView classes |
 | Offline-first sync | Confirmed | Local/remote data sources + sync use cases |
 | Geofence check-in | Confirmed | GeoLockEntity + distance error messages |

@@ -18,16 +18,17 @@ class AltiusApp extends StatelessWidget {
   final String environment;
   @override
   Widget build(BuildContext context) {
+    final demoMode = environment != 'prod';
     return BlocProvider.value(
       value: cubit,
       child: BlocBuilder<WorkCubit, WorkState>(builder: (context, state) {
         return MaterialApp(
-          title: 'Altius Field · Demo',
+          title: 'Altius Field',
           theme: AppTheme.light,
           supportedLocales: Strings.locales,
           locale: Strings.locales[Strings.codes.indexOf(state.language).clamp(0, 6)],
           localizationsDelegates: const [GlobalMaterialLocalizations.delegate, GlobalWidgetsLocalizations.delegate, GlobalCupertinoLocalizations.delegate],
-          home: state.session ? const HomeShell() : const LoginScreen(),
+          home: state.session ? HomeShell(demoMode: demoMode) : LoginScreen(demoMode: demoMode),
           debugShowCheckedModeBanner: false,
           onGenerateTitle: (_) => 'Altius Field · ${environment.toUpperCase()}',
         );
@@ -44,7 +45,8 @@ void _errorSnack(BuildContext context, WorkState state) {
 }
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.demoMode = true});
+  final bool demoMode;
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
@@ -59,7 +61,15 @@ class _LoginScreenState extends State<LoginScreen> {
   static const _defaultApiBase = String.fromEnvironment('API_BASE', defaultValue: '');
   static const _defaultIssuer = String.fromEnvironment('KEYCLOAK_ISSUER', defaultValue: '');
   static const _defaultClientId = String.fromEnvironment('KEYCLOAK_CLIENT_ID', defaultValue: '');
-  static const _defaultRedirectUri = String.fromEnvironment('KEYCLOAK_REDIRECT_URI', defaultValue: 'altius://auth');
+  /// Must match Android/iOS AppAuth redirect registration.
+  static const _defaultRedirectUri = String.fromEnvironment(
+    'KEYCLOAK_REDIRECT_URI',
+    defaultValue: 'com.altius.altius_field:/oauthredirect',
+  );
+
+  /// Compile-time IdP + API wiring — when present, Keycloak is the primary path.
+  static bool get _liveConfigured =>
+      _defaultApiBase.isNotEmpty && _defaultIssuer.isNotEmpty && _defaultClientId.isNotEmpty;
 
   @override
   void initState() {
@@ -70,10 +80,18 @@ class _LoginScreenState extends State<LoginScreen> {
     _redirectUri.text = _defaultRedirectUri;
   }
 
+  bool get _wantsKeycloak {
+    if (_liveConfigured || !widget.demoMode) return true;
+    return _apiBase.text.trim().isNotEmpty ||
+        _issuer.text.trim().isNotEmpty ||
+        _clientId.text.trim().isNotEmpty;
+  }
+
   @override
   Widget build(BuildContext context) {
     final cubit = context.read<WorkCubit>();
     final s = Strings(cubit.state.language);
+    final livePrimary = _liveConfigured || !widget.demoMode;
     return Scaffold(
       body: SafeArea(child: ListView(padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32), children: [
         const SizedBox(height: 24),
@@ -82,22 +100,31 @@ class _LoginScreenState extends State<LoginScreen> {
         Text('Altius Field', style: Theme.of(context).textTheme.headlineLarge),
         Text(s('driverApp'), style: Theme.of(context).textTheme.titleMedium?.copyWith(color: AppTheme.teal)),
         const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(color: const Color(0xFFFDF1DF), borderRadius: BorderRadius.circular(14)),
-          child: Text(s('demoNotice'), style: const TextStyle(fontSize: 12, color: Color(0xFF573300), height: 1.5)),
-        ),
+        if (!livePrimary)
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(color: const Color(0xFFFDF1DF), borderRadius: BorderRadius.circular(14)),
+            child: Text(s('demoNotice'), style: const TextStyle(fontSize: 12, color: Color(0xFF573300), height: 1.5)),
+          )
+        else
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(color: const Color(0xFFEFF4F8), borderRadius: BorderRadius.circular(14)),
+            child: Text(s('liveNotice'), style: const TextStyle(fontSize: 12, color: Color(0xFF1A3A4A), height: 1.5)),
+          ),
         const SizedBox(height: 28),
-        TextField(controller: _apiBase, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'API base URL', hintText: 'https://api.altius.example'), onChanged: (_) => cubit.store.saveDraft('apiBase', _apiBase.text)),
-        const SizedBox(height: 14),
-        TextField(controller: _issuer, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'Keycloak issuer', hintText: 'https://keycloak.altius.example/realms/altius'), onChanged: (_) => cubit.store.saveDraft('issuer', _issuer.text)),
-        const SizedBox(height: 14),
-        TextField(controller: _clientId, decoration: const InputDecoration(labelText: 'Client ID', hintText: 'altius-field-mobile'), onChanged: (_) => cubit.store.saveDraft('clientId', _clientId.text)),
-        const SizedBox(height: 14),
-        TextField(controller: _redirectUri, decoration: const InputDecoration(labelText: 'Redirect URI', hintText: 'altius://auth'), onChanged: (_) => cubit.store.saveDraft('redirectUri', _redirectUri.text)),
-        const SizedBox(height: 10),
+        if (livePrimary || _wantsKeycloak) ...[
+          TextField(controller: _apiBase, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'API base URL', hintText: 'https://api.altius.example'), onChanged: (_) { cubit.store.saveDraft('apiBase', _apiBase.text); setState(() {}); }),
+          const SizedBox(height: 14),
+          TextField(controller: _issuer, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'Keycloak issuer', hintText: 'https://keycloak.altius.example/realms/altius'), onChanged: (_) { cubit.store.saveDraft('issuer', _issuer.text); setState(() {}); }),
+          const SizedBox(height: 14),
+          TextField(controller: _clientId, decoration: const InputDecoration(labelText: 'Client ID', hintText: 'altius-mobile'), onChanged: (_) { cubit.store.saveDraft('clientId', _clientId.text); setState(() {}); }),
+          const SizedBox(height: 14),
+          TextField(controller: _redirectUri, decoration: const InputDecoration(labelText: 'Redirect URI', hintText: 'com.altius.altius_field:/oauthredirect'), onChanged: (_) => cubit.store.saveDraft('redirectUri', _redirectUri.text)),
+          const SizedBox(height: 10),
+        ],
         Align(alignment: Alignment.centerLeft, child: TextButton(
-          onPressed: () => showDialog<void>(context: context, builder: (_) => AlertDialog(title: Text(s('authHelp')), content: Text(Strings.fallback['authHelpBody']!), actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(s('cancel')))])),
+          onPressed: () => showDialog<void>(context: context, builder: (_) => AlertDialog(title: Text(s('authHelp')), content: Text(livePrimary ? Strings.fallback['authHelpLiveBody']! : Strings.fallback['authHelpBody']!), actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(s('cancel')))])),
           child: Text(s('authHelp')),
         )),
         const SizedBox(height: 8),
@@ -105,18 +132,33 @@ class _LoginScreenState extends State<LoginScreen> {
           onPressed: _busy ? null : () async {
             setState(() => _busy = true);
             await cubit.act(() async {
-              await cubit.store.configureAuth(
-                apiBase: _apiBase.text.trim(),
-                issuer: _issuer.text.trim(),
-                clientId: _clientId.text.trim(),
-                redirectUri: _redirectUri.text.trim(),
-              );
-              await cubit.store.signInWithKeycloak();
+              if (_wantsKeycloak) {
+                await cubit.store.configureAuth(
+                  apiBase: _apiBase.text.trim(),
+                  issuer: _issuer.text.trim(),
+                  clientId: _clientId.text.trim(),
+                  redirectUri: _redirectUri.text.trim(),
+                );
+                await cubit.store.signInWithKeycloak();
+              } else {
+                await cubit.store.enterDemoWorkspace();
+              }
             });
             if (mounted) setState(() => _busy = false);
           },
-          child: Text(s('enter')),
+          child: Text(_wantsKeycloak ? s('signIn') : s('enter')),
         ),
+        if (!livePrimary && !_wantsKeycloak) ...[
+          const SizedBox(height: 12),
+          TextButton(
+            onPressed: _busy ? null : () => setState(() {
+              _apiBase.text = _defaultApiBase.isEmpty ? 'http://127.0.0.1:8080' : _defaultApiBase;
+              _issuer.text = _defaultIssuer.isEmpty ? 'http://127.0.0.1:8081/realms/altius' : _defaultIssuer;
+              _clientId.text = _defaultClientId.isEmpty ? 'altius-mobile' : _defaultClientId;
+            }),
+            child: Text(s('useKeycloak')),
+          ),
+        ],
         const SizedBox(height: 20),
         DropdownButtonFormField<String>(
           initialValue: cubit.state.language,
@@ -132,7 +174,8 @@ class _LoginScreenState extends State<LoginScreen> {
 }
 
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key});
+  const HomeShell({super.key, this.demoMode = true});
+  final bool demoMode;
   @override
   State<HomeShell> createState() => _HomeShellState();
 }
@@ -151,7 +194,12 @@ class _HomeShellState extends State<HomeShell> {
         return Scaffold(
           appBar: AppBar(title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(s('hello'), style: Theme.of(context).textTheme.titleMedium),
-            Text('${state.organization} · ${state.hub} · ${s('demo')}', style: const TextStyle(fontSize: 11, color: AppTheme.teal)),
+            Text(
+              widget.demoMode && state.organization == 'Altius Demo'
+                  ? '${state.organization} · ${state.hub} · ${s('demo')}'
+                  : '${state.organization} · ${state.hub}',
+              style: const TextStyle(fontSize: 11, color: AppTheme.teal),
+            ),
           ])),
           body: pages[_tab],
           bottomNavigationBar: NavigationBar(
