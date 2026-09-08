@@ -13,7 +13,7 @@ const ROLE_MAP: Record<string, DemoState["role"]> = {
   driver: "Lead",
 };
 
-const KNOWN_ROLES = ["admin", "supervisor", "lead", "driver"] as const;
+const KNOWN_ROLES = ["super-admin", "admin", "supervisor", "lead", "driver"] as const;
 
 function extractRole(claims: JwtClaims): DemoState["role"] {
   const lowerRoles = new Set<string>();

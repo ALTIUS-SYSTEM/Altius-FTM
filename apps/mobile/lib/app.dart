@@ -147,7 +147,7 @@ class _HomeShellState extends State<HomeShell> {
       builder: (context, state) {
         final s = Strings(state.language);
         
-        final pages = [const TasksTab(), const RouteTab(), const ReportTab(), const SettingsTab()];
+        final pages = [const TasksTab(), const RouteTab(), const ReportTab(), const VehicleCheckTab(), const SettingsTab()];
         return Scaffold(
           appBar: AppBar(title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(s('hello'), style: Theme.of(context).textTheme.titleMedium),
@@ -160,6 +160,7 @@ class _HomeShellState extends State<HomeShell> {
               NavigationDestination(icon: const Icon(Icons.task_alt_rounded), label: s('tasks')),
               NavigationDestination(icon: const Icon(Icons.route_rounded), label: s('route')),
               NavigationDestination(icon: const Icon(Icons.description_rounded), label: s('report')),
+              NavigationDestination(icon: const Icon(Icons.fact_check_rounded), label: s('vehicleCheck')),
               NavigationDestination(icon: const Icon(Icons.settings_rounded), label: s('settings')),
             ]),
         );
@@ -547,6 +548,152 @@ class _Stat extends StatelessWidget {
     const SizedBox(height: 2),
     Text(label, style: Theme.of(context).textTheme.bodySmall, textAlign: TextAlign.center),
   ]));
+}
+
+const _equipmentItems = ['STNK', 'KIUR / KIR', 'BAN SEREP', 'TOOLS (Kunci-Kunci)', 'DONGKRAK', 'SEGITIGA PENGAMAN', 'OBAT P3K', 'APAR'];
+const _inspectionItems = ['OLI MESIN', 'OLI GARDAN', 'OLI PERSNELING', 'AIR RADIATOR', 'AIR ACCU / AKI', 'BAN', 'REM', 'KOPLING', 'BODY SCREENING', 'LAMPU-LAMPU', 'KACA SPION'];
+
+class VehicleCheckTab extends StatefulWidget {
+  const VehicleCheckTab({super.key});
+  @override
+  State<VehicleCheckTab> createState() => _VehicleCheckTabState();
+}
+
+class _VehicleCheckTabState extends State<VehicleCheckTab> {
+  final _driverName = TextEditingController();
+  final _licensePlate = TextEditingController();
+  final _vehicleType = TextEditingController();
+  final _kmStart = TextEditingController();
+  final _kmEnd = TextEditingController();
+  final _notes = TextEditingController();
+  final _serviceDate = TextEditingController();
+  final _kirDate = TextEditingController();
+  final _stnkDate = TextEditingController();
+  final Map<String, String> _items = {};
+  bool _conditionGood = true;
+
+  @override
+  void dispose() {
+    _driverName.dispose();
+    _licensePlate.dispose();
+    _vehicleType.dispose();
+    _kmStart.dispose();
+    _kmEnd.dispose();
+    _notes.dispose();
+    _serviceDate.dispose();
+    _kirDate.dispose();
+    _stnkDate.dispose();
+    super.dispose();
+  }
+
+  String _status(String name) => _items.putIfAbsent(name, () => _isEquipment(name) ? 'present' : 'good');
+
+  bool _isEquipment(String name) => _equipmentItems.contains(name);
+
+  List<Map<String, Object?>> _buildItems() {
+    final out = <Map<String, Object?>>[];
+    for (final name in _equipmentItems) {
+      out.add({'name': name, 'category': 'equipment', 'status': _items[name] ?? 'present', 'note': ''});
+    }
+    for (final name in _inspectionItems) {
+      out.add({'name': name, 'category': 'inspection', 'status': _items[name] ?? 'good', 'note': ''});
+    }
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocConsumer<WorkCubit, WorkState>(
+      listenWhen: (a, b) => a.error != b.error,
+      listener: _errorSnack,
+      builder: (context, state) {
+        final s = Strings(state.language);
+        final cubit = context.read<WorkCubit>();
+        final todayCheck = state.vehicleChecks.where((c) => c.day == cubit.store.today).firstOrNull;
+
+        return ListView(padding: const EdgeInsets.all(16), children: [
+          Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(s('vehicleCheck'), style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 10),
+            if (todayCheck != null) ...[
+              Text(s('vehicleCheckSubmitted'), style: const TextStyle(color: AppTheme.teal, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Text('${todayCheck.licensePlate} · ${todayCheck.vehicleType} · ${todayCheck.condition == 'good' ? s('conditionGood') : s('conditionBad')}'),
+            ],
+            TextField(controller: _driverName, decoration: InputDecoration(labelText: s('driverName'))),
+            const SizedBox(height: 10),
+            TextField(controller: _licensePlate, decoration: InputDecoration(labelText: s('licensePlate'))),
+            const SizedBox(height: 10),
+            TextField(controller: _vehicleType, decoration: InputDecoration(labelText: s('vehicleType'))),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: TextField(controller: _kmStart, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: s('kmStart')))),
+              const SizedBox(width: 12),
+              Expanded(child: TextField(controller: _kmEnd, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: s('kmEnd')))),
+            ]),
+            const SizedBox(height: 10),
+            Row(children: [
+              ChoiceChip(label: Text(s('conditionGood')), selected: _conditionGood, onSelected: (_) => setState(() => _conditionGood = true)),
+              const SizedBox(width: 8),
+              ChoiceChip(label: Text(s('conditionBad')), selected: !_conditionGood, onSelected: (_) => setState(() => _conditionGood = false)),
+            ]),
+          ]))),
+          Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(s('checklist'), style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 10),
+            ...[..._equipmentItems, ..._inspectionItems].map((name) {
+              final equipment = _isEquipment(name);
+              final status = _status(name);
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                subtitle: Wrap(spacing: 8, children: [
+                  for (final opt in equipment ? ['present', 'missing'] : ['good', 'damaged'])
+                    ChoiceChip(
+                      label: Text(opt),
+                      selected: status == opt,
+                      onSelected: (_) => setState(() => _items[name] = opt),
+                    ),
+                ]),
+              );
+            }),
+          ]))),
+          Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(s('reportNotes'), style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 10),
+            TextField(controller: _notes, maxLines: 3, decoration: const InputDecoration(hintText: 'Keterangan')),
+          ]))),
+          Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(s('serviceSchedule'), style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 10),
+            TextField(controller: _serviceDate, decoration: const InputDecoration(labelText: 'Service (YYYY-MM-DD)')),
+            const SizedBox(height: 10),
+            TextField(controller: _kirDate, decoration: const InputDecoration(labelText: 'KIR (YYYY-MM-DD)')),
+            const SizedBox(height: 10),
+            TextField(controller: _stnkDate, decoration: const InputDecoration(labelText: 'STNK (YYYY-MM-DD)')),
+          ]))),
+          SizedBox(width: double.infinity, child: FilledButton.icon(
+            icon: const Icon(Icons.save_rounded),
+            onPressed: state.busy || todayCheck != null ? null : () => cubit.act(() => cubit.store.submitVehicleCheck(
+              driverName: _driverName.text,
+              licensePlate: _licensePlate.text,
+              vehicleType: _vehicleType.text,
+              kmStart: int.tryParse(_kmStart.text) ?? 0,
+              kmEnd: int.tryParse(_kmEnd.text) ?? 0,
+              condition: _conditionGood ? 'good' : 'not_good',
+              items: _buildItems(),
+              notes: _notes.text,
+              serviceDate: _serviceDate.text,
+              kirDate: _kirDate.text,
+              stnkDate: _stnkDate.text,
+            )),
+            label: Text(s('save')),
+          )),
+          if (todayCheck != null) Padding(padding: const EdgeInsets.all(16), child: Text(s('vehicleCheckSubmitted'), textAlign: TextAlign.center, style: const TextStyle(color: AppTheme.teal))),
+        ]);
+      },
+    );
+  }
 }
 
 class SettingsTab extends StatelessWidget {

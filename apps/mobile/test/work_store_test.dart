@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:altius_field/core/data/work_store.dart';
+import 'package:sqlite3/sqlite3.dart' as sqlite3;
 
 void main() {
   late Directory directory;
@@ -123,4 +124,186 @@ void main() {
     await store.submitReport();
     expect((await store.reports()).length, 1);
   });
+
+  test('migration from v3 adds task coordinates, report vehicle fields and vehicle_checks', () async {
+    await store.close();
+    await _seedSchema(directory.path, 'work.sqlite', 3);
+    final reopened = WorkStore.open(
+      '${directory.path}/work.sqlite',
+      now: () => clock,
+      offset: () => 420,
+      demoWorkspace: false,
+    );
+    await reopened.initialize();
+    final task = await reopened.tasks();
+    expect(task.single, isA<FieldTask>());
+    // lat/lng added by _upgrade4.
+    expect(task.single.lat, isNull);
+    expect(task.single.lng, isNull);
+    final report = await reopened.reports();
+    expect(report.single, isA<DailyReport>());
+    expect(report.single.driverName, '');
+    expect(report.single.vehicleNumber, '');
+    expect(report.single.odometerStart, 0);
+    expect(report.single.odometerEnd, 0);
+    final checks = await reopened.vehicleChecks();
+    expect(checks, isEmpty);
+  });
+
+  test('migration from v4 adds report vehicle fields and vehicle_checks', () async {
+    await store.close();
+    await _seedSchema(directory.path, 'work.sqlite', 4);
+    final reopened = WorkStore.open(
+      '${directory.path}/work.sqlite',
+      now: () => clock,
+      offset: () => 420,
+      demoWorkspace: false,
+    );
+    await reopened.initialize();
+    expect((await reopened.tasks()).single, isA<FieldTask>());
+    expect((await reopened.reports()).single.odometerStart, 0);
+    expect((await reopened.vehicleChecks()).length, 0);
+  });
+
+  test('migration from v5 creates vehicle_checks', () async {
+    await store.close();
+    await _seedSchema(directory.path, 'work.sqlite', 5);
+    final reopened = WorkStore.open(
+      '${directory.path}/work.sqlite',
+      now: () => clock,
+      offset: () => 420,
+      demoWorkspace: false,
+    );
+    await reopened.initialize();
+    expect((await reopened.reports()).single, isA<DailyReport>());
+    expect((await reopened.vehicleChecks()).length, 0);
+  });
+
+  test('v3 data is preserved through migration to current schema', () async {
+    await store.close();
+    await _seedSchema(directory.path, 'work.sqlite', 3, seedTrip: true);
+    final reopened = WorkStore.open(
+      '${directory.path}/work.sqlite',
+      now: () => clock,
+      offset: () => 420,
+      demoWorkspace: false,
+    );
+    await reopened.initialize();
+    expect((await reopened.tasks()).length, 1);
+    expect((await reopened.tasks()).single.stage, TaskStage.arrived);
+    expect((await reopened.events()).length, greaterThanOrEqualTo(2));
+    expect((await reopened.tripActive()), isTrue);
+  });
+}
+
+/// Create a legacy SQLite file at the given version and set `user_version`.
+///
+/// These schemas reproduce the tables as they existed at that version,
+/// including the triggers added by earlier upgrades, so the current
+/// `onUpgrade` can apply the remaining deltas.
+Future<void> _seedSchema(String dir, String file, int version, {bool seedTrip = false, bool seedData = true}) async {
+  final path = '$dir/$file';
+  if (File(path).existsSync()) { File(path).deleteSync(); }
+  final db = sqlite3.sqlite3.open(path);
+  db.execute('''
+    CREATE TABLE tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      address TEXT NOT NULL,
+      stage INTEGER NOT NULL DEFAULT 0 CHECK(stage BETWEEN 0 AND 3),
+      eta INTEGER NOT NULL
+      ${version >= 4 ? ', lat REAL, lng REAL' : ''}
+    );
+  ''');
+  db.execute('CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  db.execute('''
+    CREATE TABLE events (
+      id TEXT PRIMARY KEY,
+      entity TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      utc TEXT NOT NULL,
+      offset_minutes INTEGER NOT NULL,
+      day TEXT NOT NULL,
+      delivery TEXT NOT NULL DEFAULT 'pending',
+      payload TEXT NOT NULL,
+      request_key TEXT
+    );
+  ''');
+  db.execute('CREATE UNIQUE INDEX IF NOT EXISTS event_request ON events(request_key)');
+  db.execute('''
+    CREATE TRIGGER events_no_update BEFORE UPDATE ON events
+    WHEN NOT (
+      OLD.id IS NEW.id AND OLD.entity IS NEW.entity AND OLD.kind IS NEW.kind
+      AND OLD.utc IS NEW.utc AND OLD.offset_minutes IS NEW.offset_minutes
+      AND OLD.day IS NEW.day AND OLD.payload IS NEW.payload
+      AND OLD.request_key IS NEW.request_key
+    ) BEGIN SELECT RAISE(ABORT, 'immutable event'); END;
+  ''');
+  db.execute('CREATE TRIGGER events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, \'immutable event\'); END');
+  db.execute('''
+    CREATE TABLE costs (
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      amount INTEGER NOT NULL CHECK(amount > 0),
+      note TEXT NOT NULL,
+      day TEXT NOT NULL
+    );
+  ''');
+  db.execute('''
+    CREATE TABLE reports (
+      day TEXT PRIMARY KEY,
+      total INTEGER NOT NULL,
+      completed INTEGER NOT NULL,
+      visited INTEGER NOT NULL
+      ${version >= 5 ? ', driver_name TEXT NOT NULL DEFAULT ""' : ''}
+      ${version >= 5 ? ', vehicle_number TEXT NOT NULL DEFAULT ""' : ''}
+      ${version >= 5 ? ', odometer_start INTEGER NOT NULL DEFAULT 0' : ''}
+      ${version >= 5 ? ', odometer_end INTEGER NOT NULL DEFAULT 0' : ''}
+      ${version >= 5 ? ', notes TEXT NOT NULL DEFAULT ""' : ''}
+    );
+  ''');
+  db.execute('CREATE TRIGGER reports_no_update BEFORE UPDATE ON reports BEGIN SELECT RAISE(ABORT, \'immutable report\'); END');
+  db.execute('CREATE TRIGGER reports_no_delete BEFORE DELETE ON reports BEGIN SELECT RAISE(ABORT, \'immutable report\'); END');
+  if (version >= 6) {
+    db.execute('''
+      CREATE TABLE vehicle_checks (
+        id TEXT PRIMARY KEY,
+        day TEXT NOT NULL,
+        driver_name TEXT NOT NULL DEFAULT "",
+        license_plate TEXT NOT NULL DEFAULT "",
+        vehicle_type TEXT NOT NULL DEFAULT "",
+        km_start INTEGER NOT NULL DEFAULT 0,
+        km_end INTEGER NOT NULL DEFAULT 0,
+        condition TEXT NOT NULL DEFAULT "good",
+        items TEXT NOT NULL DEFAULT "[]",
+        notes TEXT NOT NULL DEFAULT "",
+        service_date TEXT NOT NULL DEFAULT "",
+        kir_date TEXT NOT NULL DEFAULT "",
+        stnk_date TEXT NOT NULL DEFAULT "",
+        delivery TEXT NOT NULL DEFAULT "local"
+      );
+    ''');
+    db.execute('CREATE TRIGGER vehicle_checks_no_update BEFORE UPDATE ON vehicle_checks BEGIN SELECT RAISE(ABORT, \'immutable vehicle check\'); END');
+    db.execute('CREATE TRIGGER vehicle_checks_no_delete BEFORE DELETE ON vehicle_checks BEGIN SELECT RAISE(ABORT, \'immutable vehicle check\'); END');
+  }
+  if (seedData) {
+    if (version >= 4) {
+      db.execute("INSERT INTO tasks VALUES ('JKT-001', 'Nusantara Market', 'Jl. Sudirman', 0, 18, NULL, NULL)");
+    } else {
+      db.execute("INSERT INTO tasks VALUES ('JKT-001', 'Nusantara Market', 'Jl. Sudirman', 0, 18)");
+    }
+    if (version >= 5) {
+      db.execute("INSERT INTO reports VALUES ('2026-09-07', 0, 0, 0, '', '', 0, 0, '')");
+    } else {
+      db.execute("INSERT INTO reports VALUES ('2026-09-07', 0, 0, 0)");
+    }
+  }
+  if (seedTrip) {
+    db.execute("INSERT OR REPLACE INTO preferences VALUES ('organization', 'Altius Demo'), ('hub', 'Jakarta'), ('language', 'id'), ('trip', 'active')");
+    db.execute("UPDATE tasks SET stage = 1 WHERE id = 'JKT-001'");
+    db.execute("INSERT INTO events VALUES ('ev-1','JKT-001','tripStarted','2026-09-07T02:00:00.000Z',420,'2026-09-07','pending','{}',NULL)");
+    db.execute("INSERT INTO events VALUES ('ev-2','JKT-001','arrived','2026-09-07T02:05:00.000Z',420,'2026-09-07','pending','{}',NULL)");
+  }
+  db.execute('PRAGMA user_version = $version');
+  db.dispose();
 }

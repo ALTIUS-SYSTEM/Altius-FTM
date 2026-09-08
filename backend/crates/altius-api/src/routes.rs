@@ -2,81 +2,113 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
-use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::extract::State;
+use axum::routing::get;
 use axum::{Json, Router};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::agent;
-use crate::auth::AuthUser;
-use crate::error::{ApiError, ApiResult};
-use crate::maps::{mode_marker, schematic_eta_seconds, MapsClient};
 use crate::AppState;
-use altius_core::{Coordinate, DeviceEvent, Role, Task};
+use crate::error::{ApiError, ApiResult};
+use altius_core::Role;
 
-pub fn router() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/v3/health", get(health))
-        .route("/api/v3/ready", get(ready))
-        .route("/api/v3/auth/login", post(login))
-        .route("/api/v3/auth/refresh", post(refresh))
-        .route("/api/v3/auth/me", get(me))
-        .route("/api/v3/tasks", get(list_tasks))
-        .route("/api/v3/task/{id}", get(get_task))
-        .route("/api/v3/task-create", post(create_task))
-        .route("/api/v3/events", post(sync_events))
-        .route("/api/v3/route/eta", post(eta))
-        .route("/api/v3/route/optimize", post(optimize_route))
-        .route("/api/v3/route/geocode", post(geocode))
-        .route("/api/v3/route/static-map", post(static_map))
-        .route("/api/v3/places/autocomplete", post(autocomplete))
-        .route("/api/v3/users", get(list_users).post(create_user_account))
-        .route("/api/v3/hubs/{id}", axum::routing::patch(update_hub).delete(delete_hub))
-        .route("/api/v3/hubs-create", post(create_hub))
-        .route("/api/v3/organization", axum::routing::patch(update_organization))
-        .route("/api/v3/teams", get(list_teams).post(create_team))
-        .route("/api/v3/teams/{id}", axum::routing::patch(update_team).delete(delete_team))
-        .route("/api/v3/teams/{id}/members", post(add_team_member).delete(remove_team_member))
-        .route("/api/v3/users/{sub}/roles", axum::routing::put(set_user_roles))
-        .route("/api/v3/notify/sms", post(notify_sms))
-        .route("/api/v3/notify/whatsapp", post(notify_whatsapp))
-        .route("/api/v3/notify/push", post(register_push))
-        .route("/api/v3/notify/push/send", post(send_push))
-        .route("/api/v3/hubs", get(list_hubs))
-        .route("/api/v3/drivers", get(list_drivers))
-        .route("/api/v3/costs", post(record_cost).get(list_costs))
-        .route("/api/v3/reports", post(record_report).get(list_reports))
-        .route("/api/v3/agent/dispatch-suggestion", post(dispatch_suggestion))
-        .route("/api/v3/agent/resume", post(agent_resume))
+mod monitoring;
+
+pub(crate) mod agent;
+pub(crate) mod auth;
+pub(crate) mod costs;
+pub(crate) mod hubs;
+pub(crate) mod maps;
+pub(crate) mod notify;
+pub(crate) mod tasks;
+pub(crate) mod teams;
+pub(crate) mod users;
+
+#[cfg(test)]
+mod agent_tool_tests;
+#[cfg(test)]
+mod crud_tests;
+
+pub(crate) use crate::auth::AuthUser;
+
+pub(crate) fn store(s: &Arc<AppState>) -> ApiResult<&crate::store::Store> {
+    s.store
+        .as_ref()
+        .ok_or_else(|| ApiError::Unavailable("persistence not configured".into()))
 }
 
-#[derive(serde::Deserialize)]
-struct LoginRequest {
-    username: String,
-    password: String,
+/// Resolve the caller's org from TypeDB membership only.
+///
+/// The `organization_id` token claim is deliberately NOT trusted as a fallback:
+/// it is a Keycloak user attribute, and if it is self-editable (or minted by
+/// another client in the same realm) it becomes a tenant selector the caller
+/// controls. A subject with no membership row is forbidden, not free to pick.
+pub(crate) async fn org_of(s: &Arc<AppState>, subject: &str) -> ApiResult<String> {
+    store(s)?
+        .organization_of(subject)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::Forbidden)
 }
 
-async fn login(
-    State(s): State<Arc<AppState>>,
-    Json(req): Json<LoginRequest>,
-) -> ApiResult<Json<Value>> {
-    if !s.config.allow_password_grant {
-        return Err(ApiError::Unavailable(
-            "resource-owner password grant is disabled".into(),
+/// Gate for org-wide rosters and planning data. A Driver sees their own work,
+/// not the organization's user list, hub list or driver list.
+pub(crate) fn require_staff(principal: &AuthUser) -> ApiResult<()> {
+    if principal.has_role(Role::Admin)
+        || principal.has_role(Role::Supervisor)
+        || principal.has_role(Role::Lead)
+    {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// Gate for operations that only a super-admin may perform.
+pub(crate) fn require_super_admin(principal: &AuthUser) -> ApiResult<()> {
+    if principal.has_role(Role::SuperAdmin) {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// Admin-only: create a realm user and bind them to the caller's org and hub.
+pub(crate) fn require_admin(principal: &AuthUser) -> ApiResult<()> {
+    if principal.has_role(Role::Admin) {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// Map "the scoped query matched nothing" onto 404 rather than a silent 200.
+pub(crate) fn touched_or_404(touched: bool) -> ApiResult<Json<Value>> {
+    if touched {
+        Ok(Json(json!({ "data": { "ok": true } })))
+    } else {
+        Err(ApiError::NotFound)
+    }
+}
+
+pub(crate) fn valid_name(name: &str) -> ApiResult<&str> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 200 {
+        return Err(ApiError::BadRequest("name must be 1-200 characters".into()));
+    }
+    Ok(trimmed)
+}
+
+pub(crate) fn valid_coordinate(lat: f64, lng: f64) -> ApiResult<()> {
+    if !lat.is_finite()
+        || !lng.is_finite()
+        || !(-90.0..=90.0).contains(&lat)
+        || !(-180.0..=180.0).contains(&lng)
+    {
+        return Err(ApiError::BadRequest(
+            "latitude/longitude out of range".into(),
         ));
     }
-    if req.username.is_empty() || req.password.is_empty() {
-        return Err(ApiError::BadRequest("username and password required".into()));
-    }
-    let params = [
-        ("grant_type", "password"),
-        ("client_id", s.config.keycloak.audience.as_str()),
-        ("username", req.username.as_str()),
-        ("password", req.password.as_str()),
-    ];
-    let token = exchange_tokens(&s.http, &s.config.keycloak.token_url, &params).await?;
-    Ok(Json(token))
+    Ok(())
 }
 
 async fn health(State(s): State<Arc<AppState>>) -> Json<Value> {
@@ -108,1067 +140,26 @@ async fn ready(State(s): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
         false
     };
     if persistence {
-        Ok(Json(json!({"status": "ok", "service": "altius-api", "ready": true })))
+        Ok(Json(
+            json!({"status": "ok", "service": "altius-api", "ready": true }),
+        ))
     } else {
         Err(ApiError::Unavailable("persistence not ready".into()))
     }
 }
 
-#[derive(serde::Deserialize)]
-struct RefreshRequest {
-    refresh_token: String,
-}
-
-async fn refresh(
-    State(s): State<Arc<AppState>>,
-    Json(req): Json<RefreshRequest>,
-) -> ApiResult<Json<Value>> {
-    if req.refresh_token.is_empty() {
-        return Err(ApiError::BadRequest("refresh_token required".into()));
-    }
-    let params = [
-        ("grant_type", "refresh_token"),
-        ("client_id", s.config.keycloak.audience.as_str()),
-        ("refresh_token", req.refresh_token.as_str()),
-    ];
-    let token = exchange_tokens(&s.http, &s.config.keycloak.token_url, &params).await?;
-    Ok(Json(token))
-}
-
-async fn me(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-) -> ApiResult<Json<Value>> {
-    let (org, hub) = store(&s)?
-        .organization_and_hub_of(&principal.subject)
-        .await
-        .map_err(ApiError::Internal)?
-        .unwrap_or_default();
-    Ok(Json(json!({
-        "data": {
-            "subject": principal.subject,
-            "roles": principal.roles,
-            "organization": org,
-            "hub": hub,
-        }
-    })))
-}
-
-
-
-/// Resolve the caller's org — TypeDB membership first, token claim as
-/// fallback for tenants not yet synced.
-async fn exchange_tokens(
-    http: &reqwest::Client,
-    token_url: &str,
-    params: &[(&str, &str)],
-) -> ApiResult<Value> {
-    let resp = http
-        .post(token_url)
-        .form(params)
-        .send()
-        .await
-        .map_err(|e| ApiError::upstream("identity provider", e))?;
-    if resp.status().is_client_error() {
-        return Err(ApiError::Unauthorized);
-    }
-    if !resp.status().is_success() {
-        let status = resp.status();
-        return Err(ApiError::Internal(anyhow::anyhow!("idp error {status}")));
-    }
-    let token: Value = resp
-        .json()
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("idp token parse: {e}")))?;
-    Ok(json!({
-        "accessToken": token.get("access_token").and_then(Value::as_str),
-        "refreshToken": token.get("refresh_token").and_then(Value::as_str),
-        "expiresIn": token.get("expires_in").and_then(Value::as_u64),
-        "tokenType": token.get("token_type").and_then(Value::as_str),
-    }))
-}
-
-fn store(s: &Arc<AppState>) -> ApiResult<&crate::store::Store> {
-    s.store
-        .as_ref()
-        .ok_or_else(|| ApiError::Unavailable("persistence not configured".into()))
-}
-
-/// Resolve the caller's org from TypeDB membership only.
-///
-/// The `organization_id` token claim is deliberately NOT trusted as a fallback:
-/// it is a Keycloak user attribute, and if it is self-editable (or minted by
-/// another client in the same realm) it becomes a tenant selector the caller
-/// controls. A subject with no membership row is forbidden, not free to pick.
-async fn org_of(s: &Arc<AppState>, subject: &str) -> ApiResult<String> {
-    store(s)?
-        .organization_of(subject)
-        .await
-        .map_err(ApiError::Internal)?
-        .ok_or(ApiError::Forbidden)
-}
-
-/// Gate for org-wide rosters and planning data. A Driver sees their own work,
-/// not the organization's user list, hub list or driver list.
-fn require_staff(principal: &AuthUser) -> ApiResult<()> {
-    if principal.has_role(Role::Admin)
-        || principal.has_role(Role::Supervisor)
-        || principal.has_role(Role::Lead)
-    {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden)
-    }
-}
-
-async fn list_tasks(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-) -> ApiResult<Json<Value>> {
-    let org = org_of(&s, &principal.subject).await?;
-    let tasks = store(&s)?
-        .tasks_for_org(&org)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(Json(json!({
-        "data": tasks,
-        "meta": { "mode": "live", "organization": org }
-    })))
-}
-
-async fn get_task(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    let org = org_of(&s, &principal.subject).await?;
-    store(&s)?
-        .task_by_id(&org, &id)
-        .await
-        .map_err(ApiError::Internal)?
-        .map(|t| Json(json!({ "data": t })))
-        .ok_or(ApiError::NotFound)
-}
-
-async fn create_task(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(task): Json<Task>,
-) -> ApiResult<Json<Value>> {
-    // Allow-list, not deny-list: a deny on Driver alone let every token that
-    // carried no recognised role through.
-    require_staff(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    store(&s)?
-        .create_task(&org, &task)
-        .await
-        // The store rejects a hub outside the caller's org; that is the
-        // client's mistake, not an internal fault.
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    Ok(Json(json!({ "data": { "taskId": task.id } })))
-}
-
-async fn sync_events(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(events): Json<Vec<DeviceEvent>>,
-) -> ApiResult<Json<Value>> {
-    if !principal.has_role(Role::Driver) {
-        return Err(ApiError::Forbidden);
-    }
-    if events.is_empty() || events.len() > 500 {
-        return Err(ApiError::BadRequest("batch must contain 1-500 events".into()));
-    }
-    let scope = store(&s)?
-        .organization_and_hub_of(&principal.subject)
-        .await
-        .map_err(ApiError::Internal)?
-        .ok_or(ApiError::Forbidden)?;
-    for ev in &events {
-        if ev.tenant_id != scope.0 || ev.hub_id != scope.1 {
-            return Err(ApiError::BadRequest("event tenant/hub scope mismatch".into()));
-        }
-    }
-    let st = store(&s)?;
-    let mut receipts = Vec::with_capacity(events.len());
-    for ev in &events {
-        receipts.push(st.record_event(&scope.0, &principal.subject, ev).await.map_err(ApiError::Internal)?);
-    }
-    Ok(Json(json!({ "data": receipts })))
-}
-
-#[derive(serde::Deserialize)]
-struct OptimizeRequest {
-    origin: Coordinate,
-    waypoints: Vec<Coordinate>,
-}
-
-async fn optimize_route(
-    State(s): State<Arc<AppState>>,
-    _principal: AuthUser,
-    Json(req): Json<OptimizeRequest>,
-) -> ApiResult<Json<Value>> {
-    if req.waypoints.len() > crate::maps::MAX_OPTIMIZE_WAYPOINTS {
-        return Err(ApiError::BadRequest(format!(
-            "at most {} waypoints",
-            crate::maps::MAX_OPTIMIZE_WAYPOINTS
-        )));
-    }
-    let maps = MapsClient::new(s.http.clone(), s.config.google_maps_api_key.clone());
-    let out = maps.optimize_stops(req.origin, &req.waypoints).await?;
-    Ok(Json(json!({ "data": out })))
-}
-
-#[derive(serde::Deserialize)]
-struct StaticMapRequest {
-    markers: Vec<Coordinate>,
-    #[serde(default)]
-    polyline: Option<String>,
-    #[serde(default)]
-    width: Option<u32>,
-    #[serde(default)]
-    height: Option<u32>,
-}
-
-/// Render a route as a PNG. The Maps key stays server-side: the browser gets
-/// an image from *our* origin, never a Google URL bearing the credential.
-async fn static_map(
-    State(s): State<Arc<AppState>>,
-    _principal: AuthUser,
-    Json(req): Json<StaticMapRequest>,
-) -> ApiResult<axum::response::Response> {
-    if req.markers.is_empty() {
-        return Err(ApiError::BadRequest("at least one marker required".into()));
-    }
-    if req.markers.len() > crate::maps::MAX_OPTIMIZE_WAYPOINTS + 1 {
-        return Err(ApiError::BadRequest(format!(
-            "at most {} markers",
-            crate::maps::MAX_OPTIMIZE_WAYPOINTS + 1
-        )));
-    }
-    let maps = MapsClient::new(s.http.clone(), s.config.google_maps_api_key.clone());
-    if !maps.enabled() {
-        return Err(ApiError::Unavailable("maps not configured".into()));
-    }
-    let png = maps
-        .static_map(
-            &req.markers,
-            req.polyline.as_deref(),
-            req.width.unwrap_or(640),
-            req.height.unwrap_or(360),
-        )
-        .await?;
-    Ok((
-        [
-            (axum::http::header::CONTENT_TYPE, "image/png"),
-            // Per-caller route geometry: cacheable in the browser, never shared.
-            (axum::http::header::CACHE_CONTROL, "private, max-age=300"),
-        ],
-        png,
-    )
-        .into_response())
-}
-
-#[derive(serde::Deserialize)]
-struct GeocodeRequest {
-    address: String,
-}
-
-async fn geocode(
-    State(s): State<Arc<AppState>>,
-    _principal: AuthUser,
-    Json(req): Json<GeocodeRequest>,
-) -> ApiResult<Json<Value>> {
-    let maps = MapsClient::new(s.http.clone(), s.config.google_maps_api_key.clone());
-    let point = maps.geocode(&req.address).await?;
-    Ok(Json(json!({ "data": { "location": point }, "meta": mode_marker(maps.enabled()) })))
-}
-
-#[derive(serde::Deserialize)]
-struct AutocompleteRequest {
-    input: String,
-}
-
-async fn autocomplete(
-    State(s): State<Arc<AppState>>,
-    _principal: AuthUser,
-    Json(req): Json<AutocompleteRequest>,
-) -> ApiResult<Json<Value>> {
-    let maps = MapsClient::new(s.http.clone(), s.config.google_maps_api_key.clone());
-    let suggestions = maps.autocomplete(&req.input).await?;
-    Ok(Json(json!({
-        "data": suggestions,
-        "meta": mode_marker(maps.enabled())
-    })))
-}
-
-async fn list_users(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-) -> ApiResult<Json<Value>> {
-    require_staff(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    let users = store(&s)?.users_for_org(&org).await.map_err(ApiError::Internal)?;
-    Ok(Json(json!({ "data": users, "meta": { "organization": org } })))
-}
-
-async fn list_hubs(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-) -> ApiResult<Json<Value>> {
-    require_staff(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    let hubs = store(&s)?.hubs_for_org(&org).await.map_err(ApiError::Internal)?;
-    Ok(Json(json!({ "data": hubs, "meta": { "organization": org } })))
-}
-
-async fn list_drivers(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-) -> ApiResult<Json<Value>> {
-    require_staff(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    let drivers = store(&s)?.drivers_for_org(&org).await.map_err(ApiError::Internal)?;
-    Ok(Json(json!({ "data": drivers, "meta": { "organization": org } })))
-}
-
-async fn record_cost(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(req): Json<altius_core::CostEntry>,
-) -> ApiResult<Json<Value>> {
-    store(&s)?
-        .record_cost(&req, &principal.subject)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(Json(json!({ "data": { "id": req.id } })))
-}
-
-async fn list_costs(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-) -> ApiResult<Json<Value>> {
-    let day = None::<&str>;
-    let costs = store(&s)?
-        .costs_for_driver(&principal.subject, day)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(Json(json!({ "data": costs })))
-}
-
-async fn record_report(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(mut req): Json<altius_core::DailyReport>,
-) -> ApiResult<Json<Value>> {
-    // Submitting a report never approves it. `status` and `revision` are
-    // server-owned; accepting them from the body let a driver post their own
-    // LHS as `approved` and skip supervisor review entirely.
-    req.status = altius_core::LhsStatus::Submitted;
-    req.revision = 0;
-    req.driver_id = principal.subject.clone();
-    let (_, hub) = store(&s)?
-        .organization_and_hub_of(&principal.subject)
-        .await
-        .map_err(ApiError::Internal)?
-        .unwrap_or_default();
-    req.hub_id = hub;
-    store(&s)?
-        .record_daily_report(&req, &principal.subject)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(Json(json!({ "data": { "day": req.day } })))
-}
-
-async fn list_reports(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-) -> ApiResult<Json<Value>> {
-    let reports = store(&s)?
-        .reports_for_driver(&principal.subject)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(Json(json!({ "data": reports })))
-}
-
-fn dispatch_tools(state: &Arc<AppState>) -> Vec<agent::Tool> {
-    vec![agent::Tool {
-        name: "plan_route".into(),
-        description: "Order stops and return per-leg ETA in minutes".into(),
-        parameters: json!({
-            "type": "object",
-            "properties": {
-                "stops": { "type": "array", "items": { "type": "string" } }
-            },
-            "required": ["stops"],
-        }),
-        gated: true, // HITL: supervisor approves before dispatch writes anything
-        exec: {
-            let state = Arc::clone(state);
-            Box::new(move |args| {
-                let state = Arc::clone(&state);
-                Box::pin(async move {
-                    // Real solver input: pairwise leg durations via Distance Matrix.
-                    let points: Vec<Coordinate> = args
-                        .get("stops")
-                        .and_then(Value::as_array)
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|s| serde_json::from_value::<Coordinate>(s.clone()).ok())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    if points.len() < 2 {
-                        return agent::ToolOutput::Executed(json!({
-                            "error": "plan_route needs >=2 coordinate stops"
-                        }));
-                    }
-                    let maps = MapsClient::new(
-                        state.http.clone(),
-                        state.config.google_maps_api_key.clone(),
-                    );
-                    let matrix = if maps.enabled() {
-                        match maps.distance_matrix_seconds(&points, &points).await {
-                            Ok(m) => m,
-                            Err(e) => {
-                                return agent::ToolOutput::Executed(json!({
-                                    "error": format!("distance matrix: {e}")
-                                }))
-                            }
-                        }
-                    } else {
-                        points
-                            .iter()
-                            .map(|a| {
-                                points
-                                    .iter()
-                                    .map(|b| Some(schematic_eta_seconds(*a, *b)))
-                                    .collect()
-                            })
-                            .collect()
-                    };
-                    agent::ToolOutput::Executed(json!({
-                        "durations_seconds": matrix,
-                        "source": if maps.enabled() { "live" } else { "demo" },
-                    }))
-                })
-            })
-        },
-    }]
-}
-
-#[derive(serde::Deserialize)]
-struct ResumeRequest {
-    state: String,
-    decision: String,
-    #[serde(default)]
-    reason: Option<String>,
-}
-
-async fn agent_resume(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(req): Json<ResumeRequest>,
-) -> ApiResult<Json<Value>> {
-    if !(principal.has_role(Role::Admin) || principal.has_role(Role::Supervisor)) {
-        return Err(ApiError::Forbidden);
-    }
-    let key = s
-        .config
-        .openrouter_api_key
-        .clone()
-        .ok_or_else(|| ApiError::Unavailable("OPENROUTER_API_KEY not configured".into()))?;
-    let decision = match req.decision.as_str() {
-        "approve" => agent::Decision::Approve,
-        "reject" => agent::Decision::Reject {
-            reason: req.reason.unwrap_or_else(|| "rejected".into()),
-        },
-        _ => return Err(ApiError::BadRequest("decision must be approve|reject".into())),
-    };
-    let secret = s
-        .config
-        .agent_state_secret
-        .as_deref()
-        .ok_or_else(|| ApiError::Unavailable("AGENT_STATE_SECRET not configured".into()))?;
-    match agent::resume(
-        &s.http,
-        &key,
-        &s.config.openrouter_model,
-        &dispatch_tools(&s),
-        &req.state,
-        secret,
-        &principal.subject,
-        decision,
-    )
-    .await?
-    {
-        agent::AgentRun::Finished(text) => Ok(Json(json!({ "data": { "text": text } }))),
-        agent::AgentRun::AwaitingApproval { call, state } => Ok(Json(json!({
-            "data": { "status": "awaiting_approval", "call": call },
-            "meta": { "state": state }
-        }))),
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct EtaRequest {
-    from: Coordinate,
-    to: Coordinate,
-}
-
-async fn eta(
-    State(s): State<Arc<AppState>>,
-    _principal: AuthUser,
-    Json(req): Json<EtaRequest>,
-) -> ApiResult<Json<Value>> {
-    let maps = MapsClient::new(s.http.clone(), s.config.google_maps_api_key.clone());
-    let (seconds, marker) = if maps.enabled() {
-        (maps.eta_seconds(req.from, req.to).await?, mode_marker(true))
-    } else {
-        (schematic_eta_seconds(req.from, req.to), mode_marker(false))
-    };
-    Ok(Json(json!({ "data": { "eta_seconds": seconds }, "meta": marker })))
-}
-
-async fn dispatch_suggestion(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(input): Json<Value>,
-) -> ApiResult<Json<Value>> {
-    if !(principal.has_role(Role::Admin) || principal.has_role(Role::Supervisor)) {
-        return Err(ApiError::Forbidden);
-    }
-    let key = s
-        .config
-        .openrouter_api_key
-        .clone()
-        .ok_or_else(|| ApiError::Unavailable("OPENROUTER_API_KEY not configured".into()))?;
-
-    let tools = dispatch_tools(&s);
-
-    let secret = s
-        .config
-        .agent_state_secret
-        .as_deref()
-        .ok_or_else(|| ApiError::Unavailable("AGENT_STATE_SECRET not configured".into()))?;
-    match agent::run(
-        &s.http,
-        &key,
-        &s.config.openrouter_model,
-        "You are Altius dispatch. Suggest an efficient stop order and flag risks. Never write data without approval.",
-        &serde_json::to_string(&input).unwrap_or_default(),
-        &tools,
-        secret,
-        &principal.subject,
-    )
-    .await?
-    {
-        agent::AgentRun::Finished(text) => Ok(Json(json!({ "data": { "text": text } }))),
-        agent::AgentRun::AwaitingApproval { call, state } => Ok(Json(json!({
-            "data": { "status": "awaiting_approval", "call": call },
-            "meta": { "state": state }
-        }))),
-    }
-}
-
-/// Admin-only: create a realm user and bind them to the caller's org and hub.
-fn require_admin(principal: &AuthUser) -> ApiResult<()> {
-    if principal.has_role(Role::Admin) { Ok(()) } else { Err(ApiError::Forbidden) }
-}
-
-#[derive(serde::Deserialize)]
-struct CreateUserRequest {
-    username: String,
-    email: String,
-    display_name: String,
-    #[serde(default)]
-    realm_roles: Vec<String>,
-    /// Hub to assign; must belong to the caller's organization. Defaults to
-    /// the caller's own hub.
-    #[serde(default)]
-    hub_id: Option<String>,
-}
-
-async fn create_user_account(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(req): Json<CreateUserRequest>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&principal)?;
-    let admin_cfg = s
-        .config
-        .keycloak_admin
-        .as_ref()
-        .ok_or_else(|| ApiError::Unavailable("user provisioning is not configured".into()))?;
-
-    if req.username.trim().is_empty() || req.email.trim().is_empty() {
-        return Err(ApiError::BadRequest("username and email are required".into()));
-    }
-    if req.display_name.trim().len() > 200 {
-        return Err(ApiError::BadRequest("display name is too long".into()));
-    }
-    // Only roles this system understands; an arbitrary realm role would be
-    // granted here and mean nothing to the API's own authorization.
-    const ALLOWED: [&str; 4] = ["admin", "supervisor", "lead", "driver"];
-    if let Some(bad) = req.realm_roles.iter().find(|r| !ALLOWED.contains(&r.as_str())) {
-        return Err(ApiError::BadRequest(format!("unsupported role: {bad}")));
-    }
-
-    // Scope comes from the caller's token, never the request body.
-    let (org, own_hub) = store(&s)?
-        .organization_and_hub_of(&principal.subject)
-        .await
-        .map_err(ApiError::Internal)?
-        .ok_or(ApiError::Forbidden)?;
-    let hub = req.hub_id.unwrap_or(own_hub);
-
-    let created = crate::admin::AdminClient::new(&s.http, admin_cfg)
-        .create_user(
-            req.username.trim(),
-            req.email.trim(),
-            req.display_name.trim(),
-            &req.realm_roles,
-        )
-        .await?;
-
-    // The identity exists now; if the membership write fails the account would
-    // be a ghost — say so explicitly rather than reporting success.
-    store(&s)?
-        .provision_user(&org, &hub, &created.subject, req.display_name.trim())
-        .await
-        .map_err(|e| {
-            tracing::error!(subject = %created.subject, error = %e, "keycloak user created but membership write failed");
-            ApiError::Internal(anyhow::anyhow!(
-                "user created in the identity provider but not linked to the organization"
-            ))
-        })?;
-
-    Ok(Json(json!({
-        "data": {
-            "subject": created.subject,
-            "organization": org,
-            "hub": hub,
-            // Shown once, to the admin who created the account. Keycloak marks
-            // it temporary, so the user must change it at first login.
-            "temporaryPassword": created.temporary_password,
-        }
-    })))
-}
-
-#[derive(serde::Deserialize)]
-struct NotifyRequest {
-    to: String,
-    message: String,
-}
-
-async fn notify_sms(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(req): Json<NotifyRequest>,
-) -> ApiResult<Json<Value>> {
-    send_message(&s, &principal, crate::notify::Channel::Sms, req).await
-}
-
-async fn notify_whatsapp(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(req): Json<NotifyRequest>,
-) -> ApiResult<Json<Value>> {
-    send_message(&s, &principal, crate::notify::Channel::WhatsApp, req).await
-}
-
-#[derive(serde::Deserialize)]
-struct RegisterPushRequest {
-    device_id: String,
-    token: String,
-}
-
-async fn register_push(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(req): Json<RegisterPushRequest>,
-) -> ApiResult<Json<Value>> {
-    if req.device_id.trim().is_empty() || req.token.trim().is_empty() {
-        return Err(ApiError::BadRequest("device_id and token are required".into()));
-    }
-    store(&s)?
-        .register_push_token(&principal.subject, req.device_id.trim(), req.token.trim())
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(Json(json!({ "data": { "registered": true } })))
-}
-
-#[derive(serde::Deserialize)]
-struct SendPushRequest {
-    to_subject: String,
-    title: String,
-    body: String,
-}
-
-async fn send_push(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(req): Json<SendPushRequest>,
-) -> ApiResult<Json<Value>> {
-    // Push is a staff action: it delivers to a driver's device and can be
-    // used for harassment if ungated.
-    require_staff(&principal)?;
-    if req.to_subject.trim().is_empty() || req.title.trim().is_empty() || req.body.trim().is_empty() {
-        return Err(ApiError::BadRequest("to_subject, title and body are required".into()));
-    }
-    let tokens = store(&s)?
-        .push_tokens_for_user(&req.to_subject)
-        .await
-        .map_err(ApiError::Internal)?;
-    if tokens.is_empty() {
-        return Err(ApiError::Unavailable("driver has no registered push tokens".into()));
-    }
-    // The FCM API key is a server-side secret; the app never sees it.
-    // For now the key lives in the environment. A later iteration can move
-    // this behind a queue worker.
-    if s.config.fcm_api_key.is_none() {
-        return Err(ApiError::Unavailable("FCM not configured".into()));
-    }
-    // TODO: wire to FCM v1 batch send.
-    tracing::info!(tokens = tokens.len(), to = %req.to_subject, "push queued (FCM sender not implemented)");
-    Ok(Json(json!({ "data": { "queued": tokens.len() } })))
-}
-
-async fn send_message(
-    s: &Arc<AppState>,
-    principal: &AuthUser,
-    channel: crate::notify::Channel,
-    req: NotifyRequest,
-) -> ApiResult<Json<Value>> {
-    // Sending on the org's account costs money and reaches real phones, so it
-    // is staff-only — a driver cannot use the gateway as a relay.
-    require_staff(principal)?;
-    let cfg = s
-        .config
-        .notify
-        .as_ref()
-        .ok_or_else(|| ApiError::Unavailable("messaging gateway is not configured".into()))?;
-    let recipient = crate::notify::Notifier::new(&s.http, cfg)
-        .send(channel, &req.to, &req.message)
-        .await?;
-    Ok(Json(json!({ "data": { "to": recipient, "status": "queued" } })))
-}
-
-
-// ---------------------------------------------------------------------------
-// Admin CRUD. Every handler resolves the organization from the caller's token
-// and scopes the query by it, so a body naming another tenant's id simply
-// fails to match rather than reaching across.
-// ---------------------------------------------------------------------------
-
-/// Map "the scoped query matched nothing" onto 404 rather than a silent 200.
-fn touched_or_404(touched: bool) -> ApiResult<Json<Value>> {
-    if touched {
-        Ok(Json(json!({ "data": { "ok": true } })))
-    } else {
-        Err(ApiError::NotFound)
-    }
-}
-
-fn valid_name(name: &str) -> ApiResult<&str> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() || trimmed.chars().count() > 200 {
-        return Err(ApiError::BadRequest("name must be 1-200 characters".into()));
-    }
-    Ok(trimmed)
-}
-
-fn valid_coordinate(lat: f64, lng: f64) -> ApiResult<()> {
-    if !lat.is_finite() || !lng.is_finite() || !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lng) {
-        return Err(ApiError::BadRequest("latitude/longitude out of range".into()));
-    }
-    Ok(())
-}
-
-#[derive(serde::Deserialize)]
-struct HubRequest {
-    #[serde(default)]
-    id: Option<String>,
-    name: String,
-    lat: f64,
-    lng: f64,
-}
-
-async fn create_hub(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(req): Json<HubRequest>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    let name = valid_name(&req.name)?;
-    valid_coordinate(req.lat, req.lng)?;
-    let id = req.id.unwrap_or_else(altius_core::new_id);
-    let created = store(&s)?
-        .create_hub(&org, &id, name, req.lat, req.lng)
-        .await
-        .map_err(ApiError::Internal)?;
-    if !created {
-        return Err(ApiError::Conflict("hub could not be created".into()));
-    }
-    Ok(Json(json!({ "data": { "hubId": id } })))
-}
-
-async fn update_hub(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Path(id): Path<String>,
-    Json(req): Json<HubRequest>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    let name = valid_name(&req.name)?;
-    valid_coordinate(req.lat, req.lng)?;
-    touched_or_404(
-        store(&s)?
-            .update_hub(&org, &id, name, req.lat, req.lng)
-            .await
-            .map_err(ApiError::Internal)?,
-    )
-}
-
-async fn delete_hub(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    // Refuse rather than cascade: deleting a hub with tasks or teams attached
-    // would orphan records the tenant still needs.
-    if store(&s)?
-        .hub_in_use(&org, &id)
-        .await
-        .map_err(ApiError::Internal)?
-    {
-        return Err(ApiError::Conflict(
-            "hub still has tasks or teams; reassign them first".into(),
-        ));
-    }
-    touched_or_404(
-        store(&s)?
-            .delete_hub(&org, &id)
-            .await
-            .map_err(ApiError::Internal)?,
-    )
-}
-
-#[derive(serde::Deserialize)]
-struct RenameRequest {
-    name: String,
-}
-
-async fn update_organization(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(req): Json<RenameRequest>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    let name = valid_name(&req.name)?;
-    touched_or_404(
-        store(&s)?
-            .update_organization(&org, name)
-            .await
-            .map_err(ApiError::Internal)?,
-    )
-}
-
-async fn list_teams(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-) -> ApiResult<Json<Value>> {
-    require_staff(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    let teams = store(&s)?
-        .teams_for_org(&org)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(Json(json!({ "data": teams })))
-}
-
-#[derive(serde::Deserialize)]
-struct TeamRequest {
-    #[serde(default)]
-    id: Option<String>,
-    name: String,
-    #[serde(default)]
-    shift: String,
-    #[serde(default)]
-    hub_id: Option<String>,
-}
-
-async fn create_team(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Json(req): Json<TeamRequest>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&principal)?;
-    let (org, own_hub) = store(&s)?
-        .organization_and_hub_of(&principal.subject)
-        .await
-        .map_err(ApiError::Internal)?
-        .ok_or(ApiError::Forbidden)?;
-    let name = valid_name(&req.name)?;
-    let id = req.id.unwrap_or_else(altius_core::new_id);
-    let hub = req.hub_id.unwrap_or(own_hub);
-    let created = store(&s)?
-        .create_team(&org, &hub, &id, name, req.shift.trim())
-        .await
-        .map_err(ApiError::Internal)?;
-    if !created {
-        return Err(ApiError::Conflict(
-            "team could not be created; check the hub belongs to your organization".into(),
-        ));
-    }
-    Ok(Json(json!({ "data": { "teamId": id } })))
-}
-
-async fn update_team(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Path(id): Path<String>,
-    Json(req): Json<TeamRequest>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    let name = valid_name(&req.name)?;
-    touched_or_404(
-        store(&s)?
-            .update_team(&org, &id, name, req.shift.trim())
-            .await
-            .map_err(ApiError::Internal)?,
-    )
-}
-
-async fn delete_team(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    touched_or_404(
-        store(&s)?
-            .delete_team(&org, &id)
-            .await
-            .map_err(ApiError::Internal)?,
-    )
-}
-
-#[derive(serde::Deserialize)]
-struct MemberRequest {
-    subject: String,
-}
-
-async fn add_team_member(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Path(id): Path<String>,
-    Json(req): Json<MemberRequest>,
-) -> ApiResult<Json<Value>> {
-    require_staff(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    touched_or_404(
-        store(&s)?
-            .add_team_member(&org, &id, req.subject.trim())
-            .await
-            .map_err(ApiError::Internal)?,
-    )
-}
-
-async fn remove_team_member(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Path(id): Path<String>,
-    Json(req): Json<MemberRequest>,
-) -> ApiResult<Json<Value>> {
-    require_staff(&principal)?;
-    let org = org_of(&s, &principal.subject).await?;
-    touched_or_404(
-        store(&s)?
-            .remove_team_member(&org, &id, req.subject.trim())
-            .await
-            .map_err(ApiError::Internal)?,
-    )
-}
-
-#[derive(serde::Deserialize)]
-struct RolesRequest {
-    roles: Vec<String>,
-}
-
-/// Set a user's realm roles — this system's only real permission control.
-///
-/// Roles live in Keycloak because that is what the token carries and what
-/// `AuthUser` enforces. A separate permission table would be a second
-/// authority that nothing consults.
-async fn set_user_roles(
-    State(s): State<Arc<AppState>>,
-    principal: AuthUser,
-    Path(subject): Path<String>,
-    Json(req): Json<RolesRequest>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&principal)?;
-    let admin_cfg = s
-        .config
-        .keycloak_admin
-        .as_ref()
-        .ok_or_else(|| ApiError::Unavailable("user provisioning is not configured".into()))?;
-    if let Some(bad) = req
-        .roles
-        .iter()
-        .find(|r| !crate::admin::MANAGED_ROLES.contains(&r.as_str()))
-    {
-        return Err(ApiError::BadRequest(format!("unsupported role: {bad}")));
-    }
-    // An admin may only change roles for someone in their own organization.
-    let org = org_of(&s, &principal.subject).await?;
-    if !store(&s)?
-        .user_in_org(&org, &subject)
-        .await
-        .map_err(ApiError::Internal)?
-    {
-        return Err(ApiError::NotFound);
-    }
-    // Removing your own admin role locks you (and possibly the tenant) out.
-    if subject == principal.subject && !req.roles.iter().any(|r| r == "admin") {
-        return Err(ApiError::BadRequest(
-            "you cannot remove your own admin role".into(),
-        ));
-    }
-    crate::admin::AdminClient::new(&s.http, admin_cfg)
-        .set_realm_roles(&subject, &req.roles)
-        .await?;
-    Ok(Json(json!({ "data": { "subject": subject, "roles": req.roles } })))
-}
-
-#[cfg(test)]
-mod crud_tests {
-    use super::{valid_coordinate, valid_name};
-
-    #[test]
-    fn names_are_trimmed_and_bounded() {
-        assert_eq!(valid_name("  Jakarta Pusat  ").unwrap(), "Jakarta Pusat");
-        assert!(valid_name("").is_err());
-        assert!(valid_name("   ").is_err(), "whitespace is not a name");
-        assert!(valid_name(&"x".repeat(201)).is_err());
-        assert!(valid_name(&"x".repeat(200)).is_ok());
-    }
-
-    #[test]
-    fn coordinates_reject_out_of_range_and_non_finite() {
-        assert!(valid_coordinate(-6.2, 106.8).is_ok());
-        assert!(valid_coordinate(90.0, 180.0).is_ok());
-        assert!(valid_coordinate(90.1, 0.0).is_err());
-        assert!(valid_coordinate(0.0, -180.1).is_err());
-        // NaN passes every comparison it is asked, so test it explicitly.
-        assert!(valid_coordinate(f64::NAN, 0.0).is_err());
-        assert!(valid_coordinate(0.0, f64::INFINITY).is_err());
-    }
+pub fn router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/api/v3/health", get(health))
+        .route("/api/v3/ready", get(ready))
+        .merge(auth::router())
+        .merge(tasks::router())
+        .merge(users::router())
+        .merge(teams::router())
+        .merge(hubs::router())
+        .merge(costs::router())
+        .merge(notify::router())
+        .merge(agent::router())
+        .merge(maps::router())
+        .merge(monitoring::router())
 }

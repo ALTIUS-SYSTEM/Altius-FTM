@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde_json::json;
 
 #[derive(Debug, thiserror::Error)]
@@ -35,7 +35,10 @@ impl IntoResponse for ApiError {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
             }
         };
-        (code, Json(json!({ "error": { "code": code.as_u16(), "message": msg } })))
+        (
+            code,
+            Json(json!({ "error": { "code": code.as_u16(), "message": msg } })),
+        )
             .into_response()
     }
 }

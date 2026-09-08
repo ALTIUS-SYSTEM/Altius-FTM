@@ -45,7 +45,9 @@ pub fn normalize_msisdn(raw: &str) -> ApiResult<String> {
         None => digits,
     };
     if e164.len() < 8 || e164.len() > 15 {
-        return Err(ApiError::BadRequest("recipient is not a valid phone number".into()));
+        return Err(ApiError::BadRequest(
+            "recipient is not a valid phone number".into(),
+        ));
     }
     Ok(format!("+{e164}"))
 }
@@ -96,7 +98,9 @@ impl<'a> Notifier<'a> {
             // Gateway bodies routinely echo the credential or the full request;
             // log the status only and keep the client response fixed.
             tracing::error!(status = %res.status(), channel = channel.label(), "gateway rejected message");
-            return Err(ApiError::Unavailable("messaging gateway unavailable".into()));
+            return Err(ApiError::Unavailable(
+                "messaging gateway unavailable".into(),
+            ));
         }
         // Recipient is logged, message body is not: it carries operational PII.
         tracing::info!(channel = channel.label(), %recipient, "message accepted by gateway");
@@ -110,9 +114,18 @@ mod tests {
 
     #[test]
     fn indonesian_local_numbers_become_e164() {
-        assert_eq!(normalize_msisdn("0812-3456-7890").unwrap(), "+6281234567890");
-        assert_eq!(normalize_msisdn("+62 812 3456 7890").unwrap(), "+6281234567890");
-        assert_eq!(normalize_msisdn(" 6281234567890 ").unwrap(), "+6281234567890");
+        assert_eq!(
+            normalize_msisdn("0812-3456-7890").unwrap(),
+            "+6281234567890"
+        );
+        assert_eq!(
+            normalize_msisdn("+62 812 3456 7890").unwrap(),
+            "+6281234567890"
+        );
+        assert_eq!(
+            normalize_msisdn(" 6281234567890 ").unwrap(),
+            "+6281234567890"
+        );
     }
 
     #[test]

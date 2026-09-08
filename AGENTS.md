@@ -26,7 +26,8 @@ docker compose up -d
 ```
 
 - Keycloak: http://localhost:8081
-- TypeDB: localhost:1729
+- PostgreSQL: localhost:5432 (`postgres://altius:altius@localhost:5432/altius`)
+- TypeDB: localhost:1729 (optional, only when `STORE_BACKEND=typedb`)
 - API: http://localhost:8080
 - Web dashboard: http://localhost:3000
 - Landing: http://localhost:3001

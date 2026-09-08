@@ -49,6 +49,7 @@ dependencies:
   connectivity_plus: 7.0.0
   workmanager: 0.9.3
   share_plus: ^13.3.0
+  geolocator: 14.0.3
 
 dev_dependencies:
   flutter_test:

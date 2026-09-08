@@ -16,13 +16,19 @@ reqwest = { version = "0.12", features = ["json"] }
 jsonwebtoken = "9"
 thiserror = "2"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "limit", "set-header"] }
 typedb-driver = "3"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 anyhow = "1"
+gcp_auth = "0.12"
+prometheus = "0.14"
+tokio-postgres = "0.7"
+deadpool-postgres = "0.14"
+postgres-types = { version = "0.2", features = ["with-serde_json-1", "with-chrono-0_4", "with-uuid-1"] }
+refinery = { version = "0.9", features = ["tokio-postgres"] }
 
 [profile.release]
 lto = "thin"

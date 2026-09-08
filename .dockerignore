@@ -1,0 +1,64 @@
+# Build context hygiene. Without this the context is ~6.7 GB: the Rust target
+# dir alone is 3.2 GB, node_modules 709 MB, and extraction/ holds proprietary
+# APKs that must never reach an image layer.
+
+# Version control
+.git
+.gitignore
+.github
+
+# Dependencies — reinstalled from the lockfile inside the image
+node_modules
+**/node_modules
+.pnpm-store
+
+# Build output — rebuilt inside the image
+**/.next
+**/out
+**/dist
+backend/target
+apps/mobile/build
+apps/mobile/.dart_tool
+
+# Secrets. COPY . . would otherwise bake these into a layer.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Reverse-engineering artifacts: proprietary APKs, native libs, embedded keys
+extraction
+
+# Mobile app — not containerized
+apps/mobile
+
+# Local tooling and editor state
+.desloppify
+**/.desloppify
+.claude
+.idea
+.vscode
+**/*.iml
+.DS_Store
+
+# Test and coverage output
+coverage
+playwright-report
+test-results
+**/*.tsbuildinfo
+
+# Docs and scan artifacts — not needed to build a runtime image
+Docs
+VULN-FINDINGS.json
+VULN-FINDINGS.md
+README.md
+LICENSE
+SECURITY.md
+
+# Docker's own files
+Dockerfile
+*.Dockerfile
+docker-compose*.yml
+.dockerignore

@@ -1,0 +1,103 @@
+{
+  "$comment": [
+    "Shared conformance fixtures for the GPS fraud controls.",
+    "",
+    "These controls decide whether a driver is flagged for review, and they now",
+    "have two implementations: packages/algos (web) and altius-core::gps (the",
+    "Rust McEasy worker). Two implementations of a fraud control drift, and the",
+    "drift is silent — a fail-open bug looks exactly like a clean result.",
+    "",
+    "Both sides read THIS file. A case added here must pass in both, or CI fails.",
+    "Every case below encodes a real bug that shipped: absence of corroboration",
+    "reading as clean, one NaN coordinate clearing a whole batch, and a corridor",
+    "with no measurable sample affirming 'inside'."
+  ],
+  "compareGpsStreams": {
+    "opts": { "maxTimeGapMs": 10000, "thresholdMeters": 150 },
+    "cases": [
+      {
+        "name": "matching streams are clean",
+        "app": [{ "lat": 0, "lng": 0, "at": 0 }, { "lat": 0.001, "lng": 0.001, "at": 30000 }],
+        "vehicle": [{ "lat": 0, "lng": 0, "at": 5000 }, { "lat": 0.001, "lng": 0.001, "at": 35000 }],
+        "expect": { "flag": "none", "matched": 2 }
+      },
+      {
+        "name": "divergent position is flagged",
+        "app": [{ "lat": 0, "lng": 0, "at": 0 }],
+        "vehicle": [{ "lat": 0.01, "lng": 0.01, "at": 0 }],
+        "expect": { "flag": "review", "matched": 1 }
+      },
+      {
+        "name": "withheld vehicle stream is a signal, not a gap",
+        "app": [{ "lat": 0, "lng": 0, "at": 0 }],
+        "vehicle": [],
+        "expect": { "flag": "review", "matched": 0 }
+      },
+      {
+        "name": "time-shifted vehicle stream is a signal, not a gap",
+        "app": [{ "lat": 0, "lng": 0, "at": 0 }],
+        "vehicle": [{ "lat": 0, "lng": 0, "at": 86400000 }],
+        "expect": { "flag": "review", "matched": 0 }
+      },
+      {
+        "name": "genuinely empty comparison is inconclusive",
+        "app": [],
+        "vehicle": [],
+        "expect": { "flag": "insufficient-data", "matched": 0 }
+      },
+      {
+        "name": "one unusable coordinate must not clear the batch",
+        "app": [{ "lat": null, "lng": 0, "at": 0 }],
+        "vehicle": [{ "lat": 0, "lng": 0, "at": 0 }],
+        "expect": { "flag": "review", "matched": 1 }
+      }
+    ]
+  },
+  "evaluateCorridor": {
+    "corridor": [{ "lat": 0, "lng": 0 }, { "lat": 0, "lng": 0.01 }],
+    "opts": { "radiusMeters": 100, "consecutiveBreach": 2, "maxAccuracyMeters": 50 },
+    "cases": [
+      {
+        "name": "on-corridor samples report inside",
+        "samples": [
+          { "lat": 0.0002, "lng": 0.005, "at": 1, "accuracyMeters": 5 },
+          { "lat": 0.0002, "lng": 0.006, "at": 2, "accuracyMeters": 5 }
+        ],
+        "expect": { "offRoute": false, "reason": "inside" }
+      },
+      {
+        "name": "consecutive breaches report outside",
+        "samples": [
+          { "lat": 0.005, "lng": 0.005, "at": 1, "accuracyMeters": 5 },
+          { "lat": 0.005, "lng": 0.005, "at": 2, "accuracyMeters": 5 }
+        ],
+        "expect": { "offRoute": true, "reason": "outside" }
+      },
+      {
+        "name": "an unmeasurable sample must not reset the breach streak",
+        "samples": [
+          { "lat": 0.005, "lng": 0.005, "at": 1, "accuracyMeters": 5 },
+          { "lat": null, "lng": 0, "at": 2 },
+          { "lat": 0.005, "lng": 0.005, "at": 3, "accuracyMeters": 5 }
+        ],
+        "expect": { "offRoute": true, "reason": "outside" }
+      },
+      {
+        "name": "inflated accuracy must not buy an affirmative inside",
+        "samples": [{ "lat": 0.005, "lng": 0.005, "at": 1, "accuracyMeters": 5000 }],
+        "expect": { "offRoute": false, "reason": "inaccurate" }
+      },
+      {
+        "name": "an empty batch is inconclusive, not inside",
+        "samples": [],
+        "expect": { "offRoute": false, "reason": "inaccurate" }
+      },
+      {
+        "name": "a corridor of fewer than two points cannot be evaluated",
+        "corridor": [{ "lat": 0, "lng": 0 }],
+        "samples": [{ "lat": 0.0002, "lng": 0.005, "at": 1, "accuracyMeters": 5 }],
+        "expect": { "offRoute": false, "reason": "insufficient-corridor" }
+      }
+    ]
+  }
+}

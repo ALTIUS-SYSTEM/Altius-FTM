@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
@@ -57,7 +57,12 @@ impl Jwks {
                 attempted_at: stale,
             })),
             config,
-            http: reqwest::Client::new(),
+            // JWKS fetches sit on the request path for every bearer token.
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .connect_timeout(Duration::from_secs(5))
+                .build()
+                .expect("build jwks client"),
         }
     }
 
@@ -97,11 +102,7 @@ impl Jwks {
             self.refresh().await?;
         }
         let guard = self.inner.read().await;
-        guard
-            .keys
-            .find(kid)
-            .cloned()
-            .ok_or(ApiError::Unauthorized)
+        guard.keys.find(kid).cloned().ok_or(ApiError::Unauthorized)
     }
 
     /// Validate a Bearer token and resolve the principal.
@@ -121,8 +122,8 @@ impl Jwks {
         validation.validate_nbf = true;
         validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
 
-        let data = decode::<Claims>(token, &key, &validation)
-            .map_err(|_| ApiError::Unauthorized)?;
+        let data =
+            decode::<Claims>(token, &key, &validation).map_err(|_| ApiError::Unauthorized)?;
         let claims = data.claims;
 
         let roles: Vec<Role> = claims
@@ -130,6 +131,7 @@ impl Jwks {
             .roles
             .iter()
             .filter_map(|r| match r.as_str() {
+                "super-admin" => Some(Role::SuperAdmin),
                 "admin" => Some(Role::Admin),
                 "supervisor" => Some(Role::Supervisor),
                 "lead" => Some(Role::Lead),

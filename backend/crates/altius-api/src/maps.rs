@@ -17,11 +17,9 @@ use crate::error::ApiError;
 use altius_core::Coordinate;
 
 const DIRECTIONS_URL: &str = "https://maps.googleapis.com/maps/api/directions/json";
-const MATRIX_URL: &str =
-    "https://maps.googleapis.com/maps/api/distancematrix/json";
+const MATRIX_URL: &str = "https://maps.googleapis.com/maps/api/distancematrix/json";
 const GEOCODE_URL: &str = "https://maps.googleapis.com/maps/api/geocode/json";
-const PLACES_URL: &str =
-    "https://maps.googleapis.com/maps/api/place/autocomplete/json";
+const PLACES_URL: &str = "https://maps.googleapis.com/maps/api/place/autocomplete/json";
 const STATIC_MAP_URL: &str = "https://maps.googleapis.com/maps/api/staticmap";
 
 /// Largest static-map image we will render, in pixels per side.
@@ -163,9 +161,9 @@ impl MapsClient {
     }
 
     fn key(&self) -> Result<&str, ApiError> {
-        self.key.as_deref().ok_or_else(|| {
-            ApiError::Unavailable("GOOGLE_MAPS_API_KEY not configured".into())
-        })
+        self.key
+            .as_deref()
+            .ok_or_else(|| ApiError::Unavailable("GOOGLE_MAPS_API_KEY not configured".into()))
     }
 
     /// Pace outgoing requests to the QPS budget shared by every caller.
@@ -198,10 +196,7 @@ impl MapsClient {
                 .map_err(|e| ApiError::upstream("maps", e))?;
             let status = res.status();
             if status.is_success() {
-                return res
-                    .json()
-                    .await
-                    .map_err(|e| ApiError::upstream("maps", e));
+                return res.json().await.map_err(|e| ApiError::upstream("maps", e));
             }
             let retriable = status.as_u16() == 429 || status.is_server_error();
             if !retriable || attempt + 1 == MAX_ATTEMPTS {
@@ -214,11 +209,7 @@ impl MapsClient {
     }
 
     /// Road ETA in seconds between two points (driving).
-    pub async fn eta_seconds(
-        &self,
-        from: Coordinate,
-        to: Coordinate,
-    ) -> Result<i64, ApiError> {
+    pub async fn eta_seconds(&self, from: Coordinate, to: Coordinate) -> Result<i64, ApiError> {
         let res: DirectionsResponse = self
             .get(
                 DIRECTIONS_URL,
@@ -341,7 +332,10 @@ impl MapsClient {
             .await
             .map_err(|e| ApiError::upstream("maps", e))?;
         if !res.status().is_success() {
-            return Err(ApiError::Unavailable(format!("staticmap http {}", res.status())));
+            return Err(ApiError::Unavailable(format!(
+                "staticmap http {}",
+                res.status()
+            )));
         }
         let bytes = res
             .bytes()
@@ -430,7 +424,10 @@ impl MapsClient {
         let res: GeocodeResponse = self
             .get(
                 GEOCODE_URL,
-                &[("address", address.to_string()), ("key", self.key()?.to_string())],
+                &[
+                    ("address", address.to_string()),
+                    ("key", self.key()?.to_string()),
+                ],
             )
             .await?;
         if res.status == "ZERO_RESULTS" {
@@ -545,17 +542,34 @@ mod tests {
 
     #[test]
     fn static_map_query_clamps_and_never_carries_the_key() {
-        let pts = vec![Coordinate { lat: -6.2, lng: 106.8 }; MAX_OPTIMIZE_WAYPOINTS + 10];
+        let pts = vec![
+            Coordinate {
+                lat: -6.2,
+                lng: 106.8
+            };
+            MAX_OPTIMIZE_WAYPOINTS + 10
+        ];
         let q = static_map_query(&pts, Some("abc123"), 99_999, 0);
 
         let size = &q.iter().find(|(k, _)| *k == "size").unwrap().1;
-        assert_eq!(size, &format!("{MAX_STATIC_MAP_PX}x1"), "size must clamp both ways");
+        assert_eq!(
+            size,
+            &format!("{MAX_STATIC_MAP_PX}x1"),
+            "size must clamp both ways"
+        );
 
         let markers = q.iter().filter(|(k, _)| *k == "markers").count();
-        assert_eq!(markers, MAX_OPTIMIZE_WAYPOINTS + 1, "marker count must be capped");
+        assert_eq!(
+            markers,
+            MAX_OPTIMIZE_WAYPOINTS + 1,
+            "marker count must be capped"
+        );
 
         let path = &q.iter().find(|(k, _)| *k == "path").unwrap().1;
-        assert!(path.contains("enc:abc123"), "live geometry should be sent encoded");
+        assert!(
+            path.contains("enc:abc123"),
+            "live geometry should be sent encoded"
+        );
 
         // The credential is appended by the caller that holds it, never here.
         assert!(!q.iter().any(|(k, _)| *k == "key"));
@@ -574,7 +588,11 @@ mod tests {
         assert!(!path.contains("enc:"));
 
         // A single marker has no path at all.
-        assert!(!static_map_query(&pts[..1], None, 640, 360).iter().any(|(k, _)| *k == "path"));
+        assert!(
+            !static_map_query(&pts[..1], None, 640, 360)
+                .iter()
+                .any(|(k, _)| *k == "path")
+        );
     }
 
     #[test]
@@ -582,9 +600,18 @@ mod tests {
         let origin = Coordinate { lat: 0.0, lng: 0.0 };
         // Farthest point listed first to prove ordering isn't input order.
         let wps = [
-            Coordinate { lat: 0.0, lng: 0.20 },
-            Coordinate { lat: 0.0, lng: 0.05 },
-            Coordinate { lat: 0.0, lng: 0.10 },
+            Coordinate {
+                lat: 0.0,
+                lng: 0.20,
+            },
+            Coordinate {
+                lat: 0.0,
+                lng: 0.05,
+            },
+            Coordinate {
+                lat: 0.0,
+                lng: 0.10,
+            },
         ];
         let out = greedy_order(origin, &wps);
         assert_eq!(out.order, vec![1, 2, 0]);
@@ -598,10 +625,19 @@ mod tests {
         let client = MapsClient::new(reqwest::Client::new(), None);
         let out = client
             .optimize_stops(
-                Coordinate { lat: -6.2, lng: 106.8 },
+                Coordinate {
+                    lat: -6.2,
+                    lng: 106.8,
+                },
                 &[
-                    Coordinate { lat: -6.3, lng: 106.9 },
-                    Coordinate { lat: -6.21, lng: 106.81 },
+                    Coordinate {
+                        lat: -6.3,
+                        lng: 106.9,
+                    },
+                    Coordinate {
+                        lat: -6.21,
+                        lng: 106.81,
+                    },
                 ],
             )
             .await
@@ -612,8 +648,7 @@ mod tests {
 
     #[tokio::test]
     async fn optimize_rejects_too_many_waypoints() {
-        let client =
-            MapsClient::new(reqwest::Client::new(), Some("k".into()));
+        let client = MapsClient::new(reqwest::Client::new(), Some("k".into()));
         let wps = vec![Coordinate { lat: 0.0, lng: 0.0 }; 26];
         let err = client
             .optimize_stops(Coordinate { lat: 0.0, lng: 0.0 }, &wps)

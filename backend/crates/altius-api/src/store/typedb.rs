@@ -2,22 +2,36 @@
 //! `WorkStore` guarantees (single transaction, immutable events, request-key
 //! idempotency).
 
+use std::sync::Arc;
+
 use anyhow::Context;
 use futures::StreamExt;
 use serde_json::Value;
 use typedb_driver::answer::QueryAnswer;
 use typedb_driver::{TransactionType, TypeDBDriver};
 
-use altius_core::{check_transition, DeviceEvent, EventReceipt, Id, StopStatus, Task};
+use altius_core::{DeviceEvent, EventReceipt, GpsQuality, Id, StopStatus, Task, check_transition};
 
-pub struct Store {
-    driver: TypeDBDriver,
+pub struct TypedbStore {
+    driver: Arc<TypeDBDriver>,
     database: String,
 }
 
-impl Store {
+impl Clone for TypedbStore {
+    fn clone(&self) -> Self {
+        Self {
+            driver: Arc::clone(&self.driver),
+            database: self.database.clone(),
+        }
+    }
+}
+
+impl TypedbStore {
     pub fn new(driver: TypeDBDriver, database: String) -> Self {
-        Self { driver, database }
+        Self {
+            driver: Arc::new(driver),
+            database,
+        }
     }
 
     /// Escape a value for embedding in a double-quoted TypeQL string literal.
@@ -215,7 +229,8 @@ impl Store {
                 sstage = Self::esc(&sstage),
             ));
         }
-        q.push(';');
+        // Every clause above already ends in ';' — the base insert and each
+        // stop block — so appending another produced an empty statement.
         tx.query(&q).await.context("insert task")?;
         tx.commit().await.context("commit")?;
         Ok(())
@@ -285,36 +300,38 @@ impl Store {
             let mut resolved = false;
             if let QueryAnswer::ConceptDocumentStream(_, mut docs) =
                 tx.query(&stage_q).await.context("read stop stage")?
-                && let Some(doc) = docs.next().await {
-                    let v = serde_json::to_value(doc?.into_json())?;
-                    if let Some(cur) = v.get("stage").and_then(|s| s.as_str()) {
-                        resolved = true;
-                        let Ok(from) = serde_json::from_str::<StopStatus>(
-                            &format!("\"{cur}\""),
-                        ) else {
+                && let Some(doc) = docs.next().await
+            {
+                let v = serde_json::to_value(doc?.into_json())?;
+                if let Some(cur) = v.get("stage").and_then(|s| s.as_str()) {
+                    resolved = true;
+                    let Ok(from) = serde_json::from_str::<StopStatus>(&format!("\"{cur}\"")) else {
+                        tx.rollback().await.ok();
+                        return Ok(EventReceipt::Conflict {
+                            reason: format!("stop {stop_id} has unknown stage {cur:?}"),
+                        });
+                    };
+                    match check_transition(from, ev.action) {
+                        Ok(next) => new_stage = Some(next),
+                        Err(e) => {
                             tx.rollback().await.ok();
                             return Ok(EventReceipt::Conflict {
-                                reason: format!("stop {stop_id} has unknown stage {cur:?}"),
+                                reason: e.to_string(),
                             });
-                        };
-                        match check_transition(from, ev.action) {
-                            Ok(next) => new_stage = Some(next),
-                            Err(e) => {
-                                tx.rollback().await.ok();
-                                return Ok(EventReceipt::Conflict {
-                                    reason: e.to_string(),
-                                });
-                            }
                         }
                     }
                 }
+            }
             // No match means the stop does not exist, does not belong to this
             // task, or the task is outside the caller's org. Reject rather than
             // silently recording an event that advances nothing.
             if !resolved {
                 tx.rollback().await.ok();
                 return Ok(EventReceipt::Conflict {
-                    reason: format!("stop {stop_id} is not part of task {} in this organization", ev.task_id),
+                    reason: format!(
+                        "stop {stop_id} is not part of task {} in this organization",
+                        ev.task_id
+                    ),
                 });
             }
         }
@@ -391,6 +408,55 @@ impl Store {
             tx.query(&roll).await.context("advance task stage")?;
         }
 
+        // If the event carries an app GPS fix, mirror it as an observation for
+        // comparison with the vehicle telematics stream (McEasy VSMS). The
+        // observation id is derived from the event id, so a replay is naturally
+        // idempotent and the uniqueness guard above protects it.
+        if let Some(loc) = ev.location {
+            let mut owns = Vec::new();
+            let id = format!("obs:{}", ev.event_id);
+            owns.push(format!(r#"has observation-id "{}""#, Self::esc(&id)));
+            owns.push(format!(r#"has org-id "{}""#, Self::esc(&ev.tenant_id)));
+            owns.push(format!(r#"has hub-id "{}""#, Self::esc(&ev.hub_id)));
+            owns.push(format!(r#"has user-sub "{}""#, Self::esc(driver_sub)));
+            owns.push(r#"has source "app_gps""#.to_string());
+            let quality = match ev.accuracy_meters {
+                Some(a) if a <= 50.0 => GpsQuality::Accurate,
+                Some(_) => GpsQuality::Degraded,
+                None => GpsQuality::Accurate,
+            };
+            owns.push(format!(
+                r#"has quality "{}""#,
+                Self::esc(&format!("{:?}", quality).to_lowercase())
+            ));
+            owns.push(format!("has latitude {}", loc.lat));
+            owns.push(format!("has longitude {}", loc.lng));
+            if let Some(a) = ev.accuracy_meters {
+                owns.push(format!("has accuracy-meters {a}"));
+            }
+            owns.push(format!(
+                r#"has recorded-at-utc {}"#,
+                ev.time.utc.format("%Y-%m-%dT%H:%M:%S%.3f+00:00")
+            ));
+            owns.push(format!(
+                r#"has day "{}""#,
+                Self::esc(&ev.time.utc.date_naive().to_string())
+            ));
+
+            let q = format!(
+                r#"match
+                    $o isa organization, has org-id "{org}";
+                    $h isa hub, has hub-id "{hub}";
+                    allocation (org: $o, hub: $h);
+                insert
+                    $obs isa gps-observation, {owns};"#,
+                org = Self::esc(&ev.tenant_id),
+                hub = Self::esc(&ev.hub_id),
+                owns = owns.join(", "),
+            );
+            tx.query(&q).await.context("insert app gps observation")?;
+        }
+
         // The check-then-insert above is not atomic across concurrent
         // transactions; `request-key @unique` is the real guard and only fires
         // here. A uniqueness violation means someone else committed the same
@@ -426,12 +492,27 @@ impl Store {
     }
 
     /// Insert the default organization and hub if they do not exist.
-    pub async fn ensure_default_org_hub(&self, config: &crate::config::Config) -> anyhow::Result<()> {
+    pub async fn ensure_default_org_hub(
+        &self,
+        config: &crate::config::Config,
+    ) -> anyhow::Result<()> {
         let tx = self
             .driver
             .transaction(&self.database, TransactionType::Write)
             .await
             .context("open write tx for provisioning")?;
+        // Guard the insert. `org-id` is `@key`, and re-inserting an existing key
+        // raises a constraint violation rather than being ignored — this runs on
+        // every boot, so an unguarded insert let the service start exactly once
+        // and fail every restart afterwards.
+        let already = format!(
+            r#"match $o isa organization, has org-id "{org}"; fetch {{ "found": true }};"#,
+            org = Self::esc(&config.default_org_id),
+        );
+        if self.exists(&already).await? {
+            tx.rollback().await.ok();
+            return Ok(());
+        }
         let q = format!(
             r#"insert
                 $o isa organization, has org-id "{org}", has display-name "{org_name}";
@@ -442,7 +523,6 @@ impl Store {
             hub = Self::esc(&config.default_hub_id),
             hub_name = Self::esc(&config.default_hub_name),
         );
-        // TypeDB ignores inserts that violate key uniqueness, so the statement is safe to replay.
         tx.query(&q).await.context("insert default org/hub")?;
         tx.commit().await.context("commit default org/hub")?;
         Ok(())
@@ -455,11 +535,21 @@ impl Store {
             .transaction(&self.database, TransactionType::Write)
             .await
             .context("open write tx for admin link")?;
+        // Same guard as the org/hub bootstrap: `user-sub` is `@key`, and this
+        // runs on every boot.
+        let already = format!(
+            r#"match $u isa user, has user-sub "{sub}"; fetch {{ "found": true }};"#,
+            sub = Self::esc(&config.default_admin_sub),
+        );
+        if self.exists(&already).await? {
+            tx.rollback().await.ok();
+            return Ok(());
+        }
         let q = format!(
             r#"match
                 $o isa organization, has org-id "{org}";
             insert
-                $u isa user, has user-sub "{sub}";
+                $u isa user, has user-sub "{sub}", has role-name "admin";
                 membership (member: $u, org: $o);"#,
             org = Self::esc(&config.default_org_id),
             sub = Self::esc(&config.default_admin_sub),
@@ -480,6 +570,7 @@ impl Store {
         hub: &str,
         subject: &str,
         display_name: &str,
+        role: &str,
     ) -> anyhow::Result<()> {
         let tx = self
             .driver
@@ -492,13 +583,15 @@ impl Store {
                 $h isa hub, has hub-id "{hub}";
                 allocation (org: $o, hub: $h);
             insert
-                $u isa user, has user-sub "{sub}", has display-name "{name}";
+                $u isa user, has user-sub "{sub}", has display-name "{name}",
+                    has role-name "{role}";
                 membership (member: $u, org: $o);
                 hub-assignment (member: $u, hub: $h);"#,
             org = Self::esc(org),
             hub = Self::esc(hub),
             sub = Self::esc(subject),
             name = Self::esc(display_name),
+            role = Self::esc(role),
         );
         tx.query(&q).await.context("provision user")?;
         tx.commit().await.context("commit provisioning")?;
@@ -593,7 +686,10 @@ impl Store {
                 $o isa organization, has org-id "{org}";
                 $h isa hub, has hub-id "{hub}";
                 allocation (org: $o, hub: $h);
-                {{ located (task: $x, hub: $h); }} or {{ stationed (team: $x, hub: $h); }};
+                {{ located (task: $x, hub: $h); }}
+                    or {{ stationed (team: $x, hub: $h); }}
+                    or {{ hub-assignment (member: $x, hub: $h); }}
+                    or {{ operates (hub: $h, vehicle: $x); }};
             fetch {{ "used": true }};"#,
             org = Self::esc(org),
             hub = Self::esc(hub_id),
@@ -707,6 +803,21 @@ impl Store {
     }
 
     pub async fn delete_team(&self, org: &str, team_id: &str) -> anyhow::Result<bool> {
+        let crew = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                allocation (org: $o, hub: $h);
+                stationed (team: $t, hub: $h);
+                $t has team-id "{tid}";
+                $c isa crewing (team: $t, member: $u);
+            delete $c;"#,
+            org = Self::esc(org),
+            tid = Self::esc(team_id),
+        );
+        // Roster links first: TypeDB refuses to delete an entity that still
+        // plays a role in a relation, and an empty roster is not an error.
+        self.write_scoped(&crew, "clear team roster").await.ok();
+
         let q = format!(
             r#"match
                 $o isa organization, has org-id "{org}";
@@ -769,6 +880,39 @@ impl Store {
         self.write_scoped(&q, "remove team member").await
     }
 
+    /// Refresh the cached realm role after Keycloak has been updated.
+    ///
+    /// Best-effort by design: Keycloak is the authority, so a stale cache here
+    /// affects only which names appear in a roster, never what anyone may do.
+    pub async fn set_cached_role(
+        &self,
+        org: &str,
+        subject: &str,
+        role: &str,
+    ) -> anyhow::Result<bool> {
+        let clear = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $u isa user, has user-sub "{sub}", has role-name $old;
+                membership (member: $u, org: $o);
+            delete has $old of $u;"#,
+            org = Self::esc(org),
+            sub = Self::esc(subject),
+        );
+        self.write_scoped(&clear, "clear cached role").await.ok();
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $u isa user, has user-sub "{sub}";
+                membership (member: $u, org: $o);
+            insert $u has role-name "{role}";"#,
+            org = Self::esc(org),
+            sub = Self::esc(subject),
+            role = Self::esc(role),
+        );
+        self.write_scoped(&q, "set cached role").await
+    }
+
     /// Confirm a subject belongs to the caller's organization before any
     /// operation that names them (role changes, team membership).
     pub async fn user_in_org(&self, org: &str, subject: &str) -> anyhow::Result<bool> {
@@ -785,10 +929,7 @@ impl Store {
     }
 
     /// Resolve the organization and first hub bound to a principal subject.
-    pub async fn organization_and_hub_of(
-        &self,
-        subject: &str,
-    ) -> anyhow::Result<Option<(Id, Id)>> {
+    pub async fn organization_and_hub_of(&self, subject: &str) -> anyhow::Result<Option<(Id, Id)>> {
         let q = format!(
             r#"match
                 $u isa user, has user-sub "{}";
@@ -808,67 +949,89 @@ impl Store {
     }
 
     /// Upsert a push token for a user's device. Existing token for the same
-    /// device id is replaced; a user can have multiple devices.
+    /// device id, owned by this same user, is replaced; a user can have
+    /// multiple devices. A device id already owned by a *different* user is
+    /// rejected rather than silently rebound: the previous fallback matched
+    /// only `device-id`, so it overwrote another user's `fcm-token` in place
+    /// while `owns` still pointed at the original owner -- that owner's
+    /// pushes then silently went to whoever last wrote the token.
+    /// Bind an FCM token to a device for this user.
+    ///
+    /// Read first, then write. The previous shape attempted the insert and
+    /// recovered from the error, but a failed statement poisons the enclosing
+    /// TypeDB transaction — every follow-up in it failed too, so a device could
+    /// never be re-registered with a refreshed token.
     pub async fn register_push_token(
         &self,
         subject: &str,
         device_id: &str,
         token: &str,
     ) -> anyhow::Result<()> {
-        let tx = self
-            .driver
-            .transaction(&self.database, TransactionType::Write)
-            .await
-            .context("open write tx for push token")?;
-        let q = format!(
+        let owner = format!(
             r#"match
-                $u isa user, has user-sub "{sub}";
-            insert
-                $d isa device, has device-id "{did}", has fcm-token "{token}";
-                owns (owner: $u, asset: $d);"#,
-            sub = Self::esc(subject),
+                $d isa device, has device-id "{did}";
+                registered (owner: $u, asset: $d);
+                $u has user-sub $sub;
+            fetch {{ "sub": $sub }};"#,
             did = Self::esc(device_id),
-            token = Self::esc(token),
         );
-        // TypeDB will reject duplicate device-id. Delete the old token first
-        // so the new one can take its place. Fetch and delete is not supported
-        // in a single write query, so we attempt the insert; on conflict we
-        // update in a second query.
-        if tx.query(&q).await.is_err() {
-            let update = format!(
-                r#"match
-                    $d isa device, has device-id "{did}";
-                    delete
-                        has $d fcm-token;
+        let existing: Option<String> = self
+            .fetch_all(&owner)
+            .await?
+            .first()
+            .and_then(|d| d.get("sub"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+
+        match existing {
+            // A device id already bound elsewhere is a conflict, not a rebind:
+            // silently moving it would send one user's notifications to another.
+            Some(other) if other != subject => {
+                anyhow::bail!("device {device_id} is already registered to a different user")
+            }
+            Some(_) => {
+                let q = format!(
+                    r#"match
+                        $d isa device, has device-id "{did}", has fcm-token $old;
+                    delete has $old of $d;
+                    insert $d has fcm-token "{token}";"#,
+                    did = Self::esc(device_id),
+                    token = Self::esc(token),
+                );
+                self.write_scoped(&q, "refresh push token").await?;
+            }
+            None => {
+                let q = format!(
+                    r#"match
+                        $u isa user, has user-sub "{sub}";
                     insert
-                        $d has fcm-token "{token}";"#,
-                did = Self::esc(device_id),
-                token = Self::esc(token),
-            );
-            tx.query(&update).await.context("update push token")?;
+                        $d isa device, has device-id "{did}", has fcm-token "{token}";
+                        registered (owner: $u, asset: $d);"#,
+                    sub = Self::esc(subject),
+                    did = Self::esc(device_id),
+                    token = Self::esc(token),
+                );
+                if !self.write_scoped(&q, "register push token").await? {
+                    anyhow::bail!("unknown user {subject}");
+                }
+            }
         }
-        tx.commit().await.context("commit push token")?;
         Ok(())
     }
 
-    /// FCM tokens for every device a user has registered.
     pub async fn push_tokens_for_user(&self, subject: &str) -> anyhow::Result<Vec<String>> {
         let q = format!(
             r#"match
                 $u isa user, has user-sub "{sub}";
-                owns (owner: $u, asset: $d);
+                registered (owner: $u, asset: $d);
                 $d has fcm-token $t;
-            select $t;"#,
+            fetch {{ "t": $t }};"#,
             sub = Self::esc(subject)
         );
         let rows = self.fetch_all(&q).await?;
         Ok(rows
             .iter()
-            .filter_map(|d| {
-                d.get("t")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            })
+            .filter_map(|d| d.get("t").and_then(|v| v.as_str()).map(str::to_string))
             .collect())
     }
 
@@ -902,8 +1065,7 @@ impl Store {
             r#"match
                 $o isa organization, has org-id "{org}";
                 membership (member: $u, org: $o);
-                $r isa role, has role-name "driver";
-                assignment (member: $u, role: $r);
+                $u has role-name "driver";
             fetch {{ "driver": {{ $u.* }} }};"#,
             org = Self::esc(org_id)
         );
@@ -911,7 +1073,11 @@ impl Store {
     }
 
     /// Insert a driver expense entry.
-    pub async fn record_cost(&self, entry: &altius_core::CostEntry, driver_sub: &str) -> anyhow::Result<()> {
+    pub async fn record_cost(
+        &self,
+        entry: &altius_core::CostEntry,
+        driver_sub: &str,
+    ) -> anyhow::Result<()> {
         let tx = self
             .driver
             .transaction(&self.database, TransactionType::Write)
@@ -941,8 +1107,14 @@ impl Store {
     }
 
     /// List cost entries for a driver, optionally filtered to a day.
-    pub async fn costs_for_driver(&self, driver_sub: &str, day: Option<&str>) -> anyhow::Result<Vec<Value>> {
-        let day_filter = day.map_or(String::new(), |d| format!(r#", has day "{}""#, Self::esc(d)));
+    pub async fn costs_for_driver(
+        &self,
+        driver_sub: &str,
+        day: Option<&str>,
+    ) -> anyhow::Result<Vec<Value>> {
+        let day_filter = day.map_or(String::new(), |d| {
+            format!(r#", has day "{}""#, Self::esc(d))
+        });
         let q = format!(
             r#"match
                 $e isa cost-entry, has user-sub "{driver}" {day_filter};
@@ -953,7 +1125,11 @@ impl Store {
     }
 
     /// Insert a daily LHS report.
-    pub async fn record_daily_report(&self, report: &altius_core::DailyReport, driver_sub: &str) -> anyhow::Result<()> {
+    pub async fn record_daily_report(
+        &self,
+        report: &altius_core::DailyReport,
+        driver_sub: &str,
+    ) -> anyhow::Result<()> {
         let tx = self
             .driver
             .transaction(&self.database, TransactionType::Write)
@@ -991,5 +1167,423 @@ impl Store {
             driver = Self::esc(driver_sub)
         );
         self.fetch_all(&q).await
+    }
+
+    /// Record a daily vehicle checklist.
+    pub async fn record_vehicle_check(
+        &self,
+        org: &str,
+        hub: &str,
+        check: &altius_core::VehicleCheck,
+    ) -> anyhow::Result<()> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for vehicle check")?;
+        let payload = Self::esc(&serde_json::to_string(&check.items).context("serialize items")?);
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub, has hub-id "{hub}";
+                allocation (org: $o, hub: $h);
+                $d isa user, has user-sub "{driver}";
+                membership (member: $d, org: $o);
+            insert
+                $c isa vehicle-check,
+                    has vehicle-check-id "{id}",
+                    has day "{day}",
+                    has driver-name "{name}",
+                    has license-plate "{plate}",
+                    has vehicle-type "{vtype}",
+                    has km-start {km_start},
+                    has km-end {km_end},
+                    has vehicle-condition "{condition}",
+                    has check-notes "{notes}",
+                    has service-date "{service}",
+                    has kir-date "{kir}",
+                    has stnk-date "{stnk}",
+                    has user-sub "{driver}",
+                    has payload "{payload}";
+                inspected (check: $c, driver: $d);"#,
+            org = Self::esc(org),
+            hub = Self::esc(hub),
+            driver = Self::esc(&check.driver_id),
+            id = Self::esc(&check.id),
+            day = Self::esc(&check.day),
+            name = Self::esc(&check.driver_name),
+            plate = Self::esc(&check.license_plate),
+            vtype = Self::esc(&check.vehicle_type),
+            km_start = check.km_start,
+            km_end = check.km_end,
+            condition = Self::esc(match check.condition {
+                altius_core::VehicleCondition::Good => "good",
+                altius_core::VehicleCondition::NotGood => "not_good",
+            }),
+            notes = Self::esc(&check.notes),
+            service = Self::esc(check.service_date.as_deref().unwrap_or("")),
+            kir = Self::esc(check.kir_date.as_deref().unwrap_or("")),
+            stnk = Self::esc(check.stnk_date.as_deref().unwrap_or("")),
+            payload = payload,
+        );
+        tx.query(&q).await.context("insert vehicle check")?;
+        tx.commit().await.context("commit vehicle check")?;
+        Ok(())
+    }
+
+    /// Vehicle checks performed by drivers in this organization.
+    ///
+    /// `vehicle-check` has no relation to hub or organization in the schema —
+    /// only `inspected` to the driver — so scope is derived through that
+    /// driver's membership. Matching `$c isa vehicle-check` unqualified, as
+    /// this did, returned every check in the database to any caller whose own
+    /// organization merely existed.
+    pub async fn vehicle_checks_for_org(
+        &self,
+        org: &str,
+        hub: Option<&str>,
+    ) -> anyhow::Result<Vec<Value>> {
+        let hub_filter = hub
+            .map(|h| {
+                format!(
+                    r#"hub-assignment (member: $d, hub: $h); $h isa hub, has hub-id "{h}";"#,
+                    h = Self::esc(h)
+                )
+            })
+            .unwrap_or_default();
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $d isa user;
+                membership (member: $d, org: $o);
+                inspected (check: $c, driver: $d);
+                {hub_filter}
+                $d has user-sub $dsub;
+            fetch {{ "check": {{ $c.* }}, "driver": $dsub }};"#,
+            org = Self::esc(org),
+            hub_filter = hub_filter
+        );
+        self.fetch_all(&q).await
+    }
+
+    // ---------- GPS observations & McEasy monitoring ----------
+
+    /// Persist a GPS observation (app or vehicle) for monitoring and review.
+    pub async fn record_gps_observation(
+        &self,
+        obs: &altius_core::GpsObservation,
+    ) -> anyhow::Result<()> {
+        let mut owns = Vec::new();
+        owns.push(format!(r#"has observation-id "{}""#, Self::esc(&obs.id)));
+        owns.push(format!(r#"has org-id "{}""#, Self::esc(&obs.tenant_id)));
+        owns.push(format!(r#"has hub-id "{}""#, Self::esc(&obs.hub_id)));
+        owns.push(format!(r#"has user-sub "{}""#, Self::esc(&obs.driver_id)));
+        if let Some(plate) = &obs.vehicle_id {
+            owns.push(format!(r#"has plate "{}""#, Self::esc(plate)));
+        }
+        owns.push(format!(
+            r#"has source "{}""#,
+            Self::esc(&format!("{:?}", obs.source).to_lowercase())
+        ));
+        owns.push(format!(
+            r#"has quality "{}""#,
+            Self::esc(&format!("{:?}", obs.quality).to_lowercase())
+        ));
+        if let Some(loc) = obs.location {
+            owns.push(format!("has latitude {lat}", lat = loc.lat));
+            owns.push(format!("has longitude {lng}", lng = loc.lng));
+        }
+        if let Some(a) = obs.accuracy_meters {
+            owns.push(format!("has accuracy-meters {a}"));
+        }
+        if let Some(s) = obs.speed_mps {
+            owns.push(format!("has speed-mps {s}"));
+        }
+        if let Some(m) = obs.mock_location_reported {
+            owns.push(format!("has mock-reported {m}"));
+        }
+        owns.push(format!(
+            r#"has recorded-at-utc {utc}"#,
+            utc = obs.time.utc.format("%Y-%m-%dT%H:%M:%S%.3f+00:00")
+        ));
+        owns.push(format!(r#"has day "{}""#, Self::esc(&obs.day())));
+
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for gps observation")?;
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub, has hub-id "{hub}";
+                allocation (org: $o, hub: $h);
+            insert
+                $obs isa gps-observation, {owns};"#,
+            org = Self::esc(&obs.tenant_id),
+            hub = Self::esc(&obs.hub_id),
+            owns = owns.join(", "),
+        );
+        tx.query(&q).await.context("insert gps observation")?;
+        tx.commit().await.context("commit gps observation")?;
+        Ok(())
+    }
+
+    /// Persist the comparison result between an app and vehicle observation.
+    pub async fn record_gps_review(&self, review: &altius_core::GpsReview) -> anyhow::Result<()> {
+        let mut owns = Vec::new();
+        owns.push(format!(r#"has review-id "{}""#, Self::esc(&review.id)));
+        owns.push(format!(r#"has org-id "{}""#, Self::esc(&review.tenant_id)));
+        owns.push(format!(r#"has hub-id "{}""#, Self::esc(&review.hub_id)));
+        owns.push(format!(
+            r#"has user-sub "{}""#,
+            Self::esc(&review.driver_id)
+        ));
+        if let Some(plate) = &review.vehicle_id {
+            owns.push(format!(r#"has plate "{}""#, Self::esc(plate)));
+        }
+        owns.push(format!(
+            r#"has app-observation-id "{}""#,
+            Self::esc(&review.app_observation_id)
+        ));
+        if let Some(vid) = &review.vehicle_observation_id {
+            owns.push(format!(
+                r#"has vehicle-observation-id "{}""#,
+                Self::esc(vid)
+            ));
+        }
+        owns.push(format!(
+            r#"has classification "{}""#,
+            Self::esc(&format!("{:?}", review.classification).to_lowercase())
+        ));
+        owns.push(format!(
+            r#"has review-reason "{}""#,
+            Self::esc(&format!("{:?}", review.reason).to_lowercase())
+        ));
+        if let Some(s) = review.separation_meters {
+            owns.push(format!("has separation-meters {s}"));
+        }
+        if let Some(t) = review.time_delta_seconds {
+            owns.push(format!("has time-delta-seconds {t}"));
+        }
+        if let Some(by) = &review.reviewed_by {
+            owns.push(format!(r#"has reviewed-by "{}""#, Self::esc(by)));
+        }
+        owns.push(format!(
+            r#"has recorded-at-utc {utc}"#,
+            utc = review.created_at.format("%Y-%m-%dT%H:%M:%S%.3f+00:00")
+        ));
+        owns.push(format!(
+            r#"has day "{}""#,
+            Self::esc(&review.created_at.date_naive().to_string())
+        ));
+
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for gps review")?;
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub, has hub-id "{hub}";
+                allocation (org: $o, hub: $h);
+            insert
+                $r isa gps-review, {owns};"#,
+            org = Self::esc(&review.tenant_id),
+            hub = Self::esc(&review.hub_id),
+            owns = owns.join(", "),
+        );
+        tx.query(&q).await.context("insert gps review")?;
+        tx.commit().await.context("commit gps review")?;
+        Ok(())
+    }
+
+    /// Mark a GPS review as reviewed by a super-admin.
+    pub async fn mark_gps_review_reviewed(
+        &self,
+        org: &str,
+        review_id: &str,
+        reviewer: &str,
+    ) -> anyhow::Result<bool> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for gps review review")?;
+        let clear = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $r isa gps-review, has review-id "{rid}", has reviewed-by $rb;
+            delete has $rb of $r;"#,
+            org = Self::esc(org),
+            rid = Self::esc(review_id),
+        );
+        // Clearing is idempotent: if there is no existing attribute the match
+        // is empty and the delete is a no-op.
+        tx.query(&clear).await.ok();
+        let insert = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $r isa gps-review, has review-id "{rid}";
+            insert
+                $r has reviewed-by "{reviewer}";"#,
+            org = Self::esc(org),
+            rid = Self::esc(review_id),
+            reviewer = Self::esc(reviewer),
+        );
+        tx.query(&insert).await.context("update gps review")?;
+        tx.commit().await.context("commit gps review review")?;
+        Ok(true)
+    }
+
+    /// GPS observations for an organization, optionally filtered by source and time.
+    pub async fn gps_observations_for_org(
+        &self,
+        org: &str,
+        source: Option<&str>,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> anyhow::Result<Vec<Value>> {
+        let source_filter = source
+            .map(|s| format!(r#"$obs has source "{s}";"#, s = Self::esc(s)))
+            .unwrap_or_default();
+        let time_filter = since
+            .map(|t| {
+                format!(
+                    r#"$obs has recorded-at-utc $t; $t >= {utc};"#,
+                    utc = t.format("%Y-%m-%dT%H:%M:%S%.3f+00:00")
+                )
+            })
+            .unwrap_or_default();
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $obs isa gps-observation, has org-id "{org}";
+                {source_filter}
+                {time_filter}
+            fetch {{ "observation": {{ $obs.* }} }};"#,
+            org = Self::esc(org),
+            source_filter = source_filter,
+            time_filter = time_filter,
+        );
+        self.fetch_all(&q).await
+    }
+
+    /// GPS reviews for an organization.
+    pub async fn gps_reviews_for_org(&self, org: &str) -> anyhow::Result<Vec<Value>> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $r isa gps-review, has org-id "{org}";
+            fetch {{ "review": {{ $r.* }} }};"#,
+            org = Self::esc(org),
+        );
+        self.fetch_all(&q).await
+    }
+
+    /// Vehicles allocated to an organization that are candidates for monitoring.
+    pub async fn monitoring_vehicles(&self, org: &str) -> anyhow::Result<Vec<Value>> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub;
+                allocation (org: $o, hub: $h);
+                $v isa vehicle;
+                operates (hub: $h, vehicle: $v);
+            fetch {{ "vehicle": {{ $v.* }}, "hub": {{ $h.* }} }};"#,
+            org = Self::esc(org),
+        );
+        self.fetch_all(&q).await
+    }
+
+    /// All organizations in the database.
+    pub async fn organizations(&self) -> anyhow::Result<Vec<String>> {
+        let q = r#"match $o isa organization, has org-id $id; fetch { "id": $id };"#;
+        Ok(self
+            .fetch_all(q)
+            .await?
+            .iter()
+            .filter_map(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_string))
+            .collect())
+    }
+
+    /// Update the McEasy vehicle id for a vehicle identified by license plate.
+    pub async fn mceasy_sync_vehicle(
+        &self,
+        org: &str,
+        plate: &str,
+        mceasy_id: &str,
+    ) -> anyhow::Result<()> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for mceasy vehicle sync")?;
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub;
+                allocation (org: $o, hub: $h);
+                $v isa vehicle, has plate "{plate}";
+                operates (hub: $h, vehicle: $v);
+            insert
+                $v has mceasy-vehicle-id "{mceasy_id}";"#,
+            org = Self::esc(org),
+            plate = Self::esc(plate),
+            mceasy_id = Self::esc(mceasy_id),
+        );
+        tx.query(&q).await.context("sync mceasy vehicle")?;
+        tx.commit().await.context("commit mceasy vehicle sync")?;
+        Ok(())
+    }
+
+    /// Update the McEasy driver id for a user in this organization.
+    pub async fn mceasy_sync_driver(
+        &self,
+        org: &str,
+        user_sub: &str,
+        mceasy_id: &str,
+    ) -> anyhow::Result<()> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for mceasy driver sync")?;
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $d isa user, has user-sub "{user_sub}";
+                membership (member: $d, org: $o);
+            insert
+                $d has mceasy-driver-id "{mceasy_id}";"#,
+            org = Self::esc(org),
+            user_sub = Self::esc(user_sub),
+            mceasy_id = Self::esc(mceasy_id),
+        );
+        tx.query(&q).await.context("sync mceasy driver")?;
+        tx.commit().await.context("commit mceasy driver sync")?;
+        Ok(())
+    }
+
+    /// Delete GPS observations older than the retention boundary.
+    pub async fn prune_gps_observations_older_than(
+        &self,
+        boundary: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<()> {
+        let q = format!(
+            r#"match
+                $obs isa gps-observation, has recorded-at-utc $t;
+                $t < {utc};
+            delete $obs;"#,
+            utc = boundary.format("%Y-%m-%dT%H:%M:%S%.3f+00:00")
+        );
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for gps prune")?;
+        tx.query(&q).await.context("prune gps observations")?;
+        tx.commit().await.context("commit gps prune")?;
+        Ok(())
     }
 }

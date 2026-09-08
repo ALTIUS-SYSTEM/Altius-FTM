@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:geolocator/geolocator.dart';
 import '../services/auth_service.dart';
 
 /// Where bearer credentials live. Backed by the platform keystore/keychain in
@@ -116,10 +117,42 @@ class DailyReport {
   final String notes;
 }
 
+class VehicleCheck {
+  VehicleCheck(QueryRow row)
+    : id = row.read<String>('id'),
+      day = row.read<String>('day'),
+      driverName = row.read<String?>('driver_name') ?? '',
+      licensePlate = row.read<String?>('license_plate') ?? '',
+      vehicleType = row.read<String?>('vehicle_type') ?? '',
+      kmStart = row.read<int?>('km_start') ?? 0,
+      kmEnd = row.read<int?>('km_end') ?? 0,
+      condition = row.read<String?>('condition') ?? 'good',
+      items = (jsonDecode(row.read<String>('items')) as List?)?.cast<Map<String, Object?>>() ?? const [],
+      notes = row.read<String?>('notes') ?? '',
+      serviceDate = row.read<String?>('service_date') ?? '',
+      kirDate = row.read<String?>('kir_date') ?? '',
+      stnkDate = row.read<String?>('stnk_date') ?? '',
+      delivery = row.read<String?>('delivery') ?? 'local';
+  final String id;
+  final String day;
+  final String driverName;
+  final String licensePlate;
+  final String vehicleType;
+  final int kmStart;
+  final int kmEnd;
+  final String condition;
+  final List<Map<String, Object?>> items;
+  final String notes;
+  final String serviceDate;
+  final String kirDate;
+  final String stnkDate;
+  final String delivery;
+}
+
 class _Database extends GeneratedDatabase {
   _Database(super.executor);
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
   @override
   Iterable<TableInfo<Table, Object?>> get allTables => const [];
   @override
@@ -153,6 +186,26 @@ class _Database extends GeneratedDatabase {
     await customStatement('ALTER TABLE reports ADD COLUMN odometer_end INTEGER NOT NULL DEFAULT 0');
     await customStatement('ALTER TABLE reports ADD COLUMN notes TEXT NOT NULL DEFAULT ""');
   }
+  Future<void> _upgrade6() async {
+    await customStatement('''CREATE TABLE vehicle_checks (
+      id TEXT PRIMARY KEY,
+      day TEXT NOT NULL,
+      driver_name TEXT NOT NULL DEFAULT "",
+      license_plate TEXT NOT NULL DEFAULT "",
+      vehicle_type TEXT NOT NULL DEFAULT "",
+      km_start INTEGER NOT NULL DEFAULT 0,
+      km_end INTEGER NOT NULL DEFAULT 0,
+      condition TEXT NOT NULL DEFAULT "good",
+      items TEXT NOT NULL DEFAULT "[]",
+      notes TEXT NOT NULL DEFAULT "",
+      service_date TEXT NOT NULL DEFAULT "",
+      kir_date TEXT NOT NULL DEFAULT "",
+      stnk_date TEXT NOT NULL DEFAULT "",
+      delivery TEXT NOT NULL DEFAULT "local"
+    )''');
+    await customStatement("CREATE TRIGGER vehicle_checks_no_update BEFORE UPDATE ON vehicle_checks BEGIN SELECT RAISE(ABORT, 'immutable vehicle check'); END");
+    await customStatement("CREATE TRIGGER vehicle_checks_no_delete BEFORE DELETE ON vehicle_checks BEGIN SELECT RAISE(ABORT, 'immutable vehicle check'); END");
+  }
   @override
   MigrationStrategy get migration => MigrationStrategy(onCreate: (m) async {
     await customStatement('CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, address TEXT NOT NULL, stage INTEGER NOT NULL DEFAULT 0 CHECK(stage BETWEEN 0 AND 3), eta INTEGER NOT NULL)');
@@ -160,6 +213,7 @@ class _Database extends GeneratedDatabase {
     await customStatement("CREATE TABLE events (id TEXT PRIMARY KEY, entity TEXT NOT NULL, kind TEXT NOT NULL, utc TEXT NOT NULL, offset_minutes INTEGER NOT NULL, day TEXT NOT NULL, delivery TEXT NOT NULL DEFAULT 'pending', payload TEXT NOT NULL)");
     await customStatement('CREATE TABLE costs (id TEXT PRIMARY KEY, category TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount > 0), note TEXT NOT NULL, day TEXT NOT NULL)');
     await customStatement('CREATE TABLE reports (day TEXT PRIMARY KEY, total INTEGER NOT NULL, completed INTEGER NOT NULL, visited INTEGER NOT NULL, driver_name TEXT NOT NULL DEFAULT "", vehicle_number TEXT NOT NULL DEFAULT "", odometer_start INTEGER NOT NULL DEFAULT 0, odometer_end INTEGER NOT NULL DEFAULT 0, notes TEXT NOT NULL DEFAULT "")');
+    await _upgrade6();
     await _upgrade();
     await _upgrade3();
     await _upgrade4();
@@ -168,6 +222,7 @@ class _Database extends GeneratedDatabase {
     if (from < 3) { await _upgrade3(); }
     if (from < 4) { await _upgrade4(); }
     if (from < 5) { await _upgrade5(); }
+    if (from < 6) { await _upgrade6(); }
   });
 }
 
@@ -178,7 +233,7 @@ class WorkStore {
     int Function()? offset,
     TokenStore? tokens,
     AuthService? auth,
-    this._demoWorkspace = true,
+    this.demoWorkspace = true,
   })  : _db = _Database(NativeDatabase(File(path), setup: (db) {
           db.execute('PRAGMA journal_mode=WAL');
           db.execute('PRAGMA synchronous=FULL');
@@ -192,7 +247,7 @@ class WorkStore {
   final AuthService _auth;
   final DateTime Function() _now;
   final int Function() _offset;
-  final bool _demoWorkspace;
+  final bool demoWorkspace;
   Future<void> _tail = Future.value();
   final Random _random = Random.secure();
   String get today => _day(_now().toUtc(), _offset());
@@ -211,7 +266,7 @@ class WorkStore {
       await _db.customStatement("INSERT OR IGNORE INTO preferences VALUES ('organization', 'Altius Demo')");
       await _db.customStatement("INSERT OR IGNORE INTO preferences VALUES ('hub', 'Jakarta')");
       await _db.customStatement("INSERT OR IGNORE INTO preferences VALUES ('language', 'id')");
-      if (_demoWorkspace) {
+      if (demoWorkspace) {
         for (final task in [
           ['JKT-001', 'Nusantara Market', 'Jl. Sudirman 24, Jakarta Selatan', 18],
           ['JKT-002', 'Cendana Distribution', 'Jl. Gatot Subroto 18, Jakarta Selatan', 32],
@@ -363,6 +418,51 @@ class WorkStore {
   Future<List<WorkEvent>> events() async => (await _db.customSelect('SELECT * FROM events ORDER BY rowid').get()).map(WorkEvent.new).toList();
   Future<List<CostEntry>> costs() async => (await _db.customSelect('SELECT * FROM costs ORDER BY rowid').get()).map(CostEntry.new).toList();
   Future<List<DailyReport>> reports() async => (await _db.customSelect('SELECT * FROM reports ORDER BY day DESC').get()).map(DailyReport.new).toList();
+  Future<List<VehicleCheck>> vehicleChecks() async => (await _db.customSelect('SELECT * FROM vehicle_checks ORDER BY day DESC').get()).map(VehicleCheck.new).toList();
+
+  Future<String> submitVehicleCheck({
+    String driverName = '',
+    String licensePlate = '',
+    String vehicleType = '',
+    int kmStart = 0,
+    int kmEnd = 0,
+    String condition = 'good',
+    List<Map<String, Object?>> items = const [],
+    String notes = '',
+    String serviceDate = '',
+    String kirDate = '',
+    String stnkDate = '',
+  }) => _write(() async {
+    if (driverName.trim().isEmpty || licensePlate.trim().isEmpty || vehicleType.trim().isEmpty) {
+      throw StateError('vehicleCheckRequired');
+    }
+    if (kmStart < 0 || kmEnd < 0) { throw StateError('odometerNegative'); }
+    if (kmEnd < kmStart) { throw StateError('odometerBackwards'); }
+    if (kmEnd - kmStart > maxDailyKm) { throw StateError('odometerImplausible'); }
+    final id = newRequestId();
+    await _db.customStatement(
+      'INSERT INTO vehicle_checks (id,day,driver_name,license_plate,vehicle_type,km_start,km_end,condition,items,notes,service_date,kir_date,stnk_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [id, today, driverName.trim(), licensePlate.trim(), vehicleType.trim(), kmStart, kmEnd, condition, jsonEncode(items), notes.trim(), serviceDate, kirDate, stnkDate],
+    );
+    await _event(
+      id,
+      'vehicleCheckSubmitted',
+      payload: {
+        'driverName': driverName.trim(),
+        'licensePlate': licensePlate.trim(),
+        'vehicleType': vehicleType.trim(),
+        'kmStart': kmStart,
+        'kmEnd': kmEnd,
+        'condition': condition,
+        'items': items,
+        'notes': notes.trim(),
+        'serviceDate': serviceDate,
+        'kirDate': kirDate,
+        'stnkDate': stnkDate,
+      },
+    );
+    return id;
+  });
 
   Future<bool> _replayed(String? key, String kind, Map<String, Object?> input) async {
     if (key == null) { return false; }
@@ -374,15 +474,31 @@ class WorkStore {
     return true;
   }
 
+  Future<Map<String, Object?>> _captureGps() async {
+    try {
+      final pos = await Geolocator.getCurrentPosition()
+          .timeout(const Duration(seconds: 5));
+      return {
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+        'accuracy': pos.accuracy,
+      };
+    } on Object {
+      return {};
+    }
+  }
+
   Future<void> _event(String entity, String kind, {Map<String, Object?> payload = const {}, String? requestId, Map<String, Object?> input = const {}}) async {
     final utc = _now().toUtc();
     final offset = _offset();
     if (offset < -840 || offset > 840) { throw StateError('clockChanged'); }
     final previous = await _db.customSelect('SELECT utc FROM events ORDER BY rowid DESC LIMIT 1').getSingleOrNull();
     if (previous != null && utc.isBefore(DateTime.parse(previous.read<String>('utc')))) { throw StateError('clockChanged'); }
+    final gps = await _captureGps();
+    final gpsValidity = gps.isEmpty ? 'unavailable' : (gps['accuracy'] as double? ?? 9999.0) <= 50.0 ? 'accurate' : 'degraded';
     await _db.customStatement('INSERT INTO events (id,entity,kind,utc,offset_minutes,day,payload,request_key) VALUES (?,?,?,?,?,?,?,?)', [
       newRequestId(), entity, kind, utc.toIso8601String(), offset, _day(utc, offset),
-      jsonEncode({...payload, 'input': input, 'organization': await preference('organization'), 'hub': await preference('hub'), 'source': 'demo-device-action', 'gps': null, 'gpsValidity': 'unavailable', 'gpsVerified': false}), requestId,
+      jsonEncode({...payload, 'input': input, 'organization': await preference('organization'), 'hub': await preference('hub'), 'source': 'demo-device-action', 'gps': gps, 'gpsValidity': gpsValidity, 'gpsVerified': false}), requestId,
     ]);
   }
 
@@ -578,6 +694,14 @@ class WorkStore {
             );
             continue;
           }
+          final payloadMap = e.payload;
+          final gps = payloadMap['gps'] as Map<String, dynamic>?;
+          final location = (gps != null && gps.isNotEmpty)
+              ? <String, Object?>{'lat': gps['lat'], 'lng': gps['lng']}
+              : null;
+          final accuracyMeters = (gps != null && gps.isNotEmpty)
+              ? (gps['accuracy'] as num?)?.toDouble()
+              : null;
           batch.add({
             'event_id': e.id,
             'idempotency_key': e.requestKey ?? e.id,
@@ -592,6 +716,8 @@ class WorkStore {
               'utc': e.utc.toUtc().toIso8601String(),
               'offset_minutes': e.offsetMinutes,
             },
+            'location': location,
+            'accuracy_meters': accuracyMeters,
             'payload': e.payload,
           });
           syncable.add(e);

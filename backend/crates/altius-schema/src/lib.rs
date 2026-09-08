@@ -26,29 +26,19 @@ pub async fn migrate(driver: &TypeDBDriver, database: &str) -> Result<()> {
         driver.databases().create(database).await?;
     }
 
-    if schema_present(driver, database).await {
-        tracing::info!(database, "schema already present; skipping define");
-        return Ok(());
-    }
-
-    let tx = driver.transaction(database, TransactionType::Schema).await?;
+    // Always apply the definitions. `define` is declarative and idempotent:
+    // re-stating an existing type is a no-op, while a type added since the
+    // database was created gets defined now.
+    //
+    // Skipping when `organization` already existed meant every type added
+    // after the first deployment — team, its relations, the user role cache —
+    // silently never appeared, and the endpoints using them failed at runtime
+    // on exactly the databases that had real data in them.
+    let tx = driver
+        .transaction(database, TransactionType::Schema)
+        .await?;
     tx.query(SCHEMA).await?;
     tx.commit().await?;
     tracing::info!(database, "schema applied");
     Ok(())
-}
-
-/// True when the marker entity type already exists in the database schema.
-async fn schema_present(driver: &TypeDBDriver, database: &str) -> bool {
-    match driver.transaction(database, TransactionType::Read).await {
-        Ok(tx) => {
-            let applied = tx
-                .query("match entity $e sub organization; select $e;")
-                .await
-                .is_ok();
-            tx.close().await.ok();
-            applied
-        }
-        Err(_) => false,
-    }
 }

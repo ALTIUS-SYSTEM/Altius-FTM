@@ -87,7 +87,31 @@ export const addTeamMember = (id: string, subject: string) =>
 export const removeTeamMember = (id: string, subject: string) =>
   call<{ ok: true }>(`/api/v3/teams/${encodeURIComponent(id)}/members`, { method: "DELETE", body: JSON.stringify({ subject }) });
 
-export const ROLES = ["admin", "supervisor", "lead", "driver"] as const;
+export interface User {
+  id: string;
+  name: string;
+  roles: string[];
+}
+
+export const listUsers = async (): Promise<User[]> => {
+  const rows = await call<Record<string, unknown>[]>('/api/v3/users');
+  return (rows ?? []).map(r => {
+    const user = (r.user ?? r) as Record<string, unknown>;
+    const role = user['role-name'];
+    const roles = Array.isArray(role)
+      ? role.map(String)
+      : typeof role === 'string'
+        ? [role]
+        : [];
+    return {
+      id: asString(user['user-sub']),
+      name: asString(user['display-name']),
+      roles,
+    };
+  });
+};
+
+export const ROLES = ["super-admin", "admin", "supervisor", "lead", "driver"] as const;
 
 export const setUserRoles = (subject: string, roles: readonly string[]) =>
   call<{ subject: string; roles: string[] }>(`/api/v3/users/${encodeURIComponent(subject)}/roles`, {

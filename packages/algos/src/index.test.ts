@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { haversineMeters, dijkstra, etaMinutes, distanceToCorridorMeters, evaluateCorridor, compareGpsStreams, aggregateDaily } from "./index.ts";
+import { readFileSync } from "node:fs";
 
 const KM_PER_DEGREE_METERS = 111_000;
 const HALF_KM_TOLERANCE = 500;
@@ -69,4 +70,41 @@ test("daily aggregation", () => {
   // A malformed amount is counted, not silently folded into the total.
   const bad = aggregateDaily([], [{ amount: Number.NaN, day: "2026-09-07" }, { amount: -5, day: "2026-09-07" }], "2026-09-07");
   assert.deepEqual(bad, { completedStops: 0, visitedStops: 0, totalCost: 0, rejectedCosts: 2 });
+});
+
+// --- shared conformance fixtures -------------------------------------------
+// The same file drives the Rust port in altius-core::gps. A case that passes
+// here and fails there (or vice versa) means the two implementations of the
+// fraud control have drifted — which is silent, because a fail-open bug looks
+// exactly like a clean result.
+test("gps controls match the shared conformance fixtures", () => {
+  const fixtures = JSON.parse(
+    readFileSync(new URL("../fixtures/gps-controls.json", import.meta.url), "utf8"),
+  ) as {
+    compareGpsStreams: { opts: { maxTimeGapMs: number; thresholdMeters: number }; cases: Array<Record<string, any>> };
+    evaluateCorridor: { corridor: Array<{ lat: number; lng: number }>; opts: { radiusMeters: number; consecutiveBreach: number; maxAccuracyMeters: number }; cases: Array<Record<string, any>> };
+  };
+
+  // `null` in the fixture means "no usable coordinate" — the shape a
+  // quality:"unavailable" observation takes once mapped.
+  const pt = (s: Record<string, any>) => ({ ...s, lat: s.lat ?? NaN, lng: s.lng ?? NaN });
+
+  for (const c of fixtures.compareGpsStreams.cases) {
+    const got = compareGpsStreams(
+      { app: c.app.map(pt), vehicle: c.vehicle.map(pt) },
+      fixtures.compareGpsStreams.opts,
+    );
+    assert.equal(got.flag, c.expect.flag, `${c.name}: flag`);
+    assert.equal(got.matched, c.expect.matched, `${c.name}: matched`);
+  }
+
+  for (const c of fixtures.evaluateCorridor.cases) {
+    const got = evaluateCorridor(
+      c.samples.map(pt),
+      c.corridor ?? fixtures.evaluateCorridor.corridor,
+      fixtures.evaluateCorridor.opts,
+    );
+    assert.equal(got.offRoute, c.expect.offRoute, `${c.name}: offRoute`);
+    assert.equal(got.reason, c.expect.reason, `${c.name}: reason`);
+  }
 });

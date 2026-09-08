@@ -10,7 +10,10 @@ reference implementation lives in [`backend/`](../backend/).
 |---|---|---|
 | API service | Rust, Axum | REST/JSON endpoints, auth enforcement, orchestration |
 | Identity | Keycloak | OIDC provider: realm per environment, clients for web/mobile, roles map to admin/supervisor/lead/driver |
-| Graph store | TypeDB 3.x | Canonical data: tenants, orgs, hubs, users, tasks, events, reports — modeled as entities + relations |
+| Transactional store | PostgreSQL | Source of truth for orgs, hubs, users, tasks, events, reports, costs, checks, GPS reviews — ACID, constraints, `tokio-postgres` + `deadpool` |
+| Graph store | TypeDB 3.x | Optional relation/inference backend (`STORE_BACKEND=typedb`) for n-ary relations and evolving schemas |
+| Local analytics | DuckDB | Planned: file-based exports and offline analysis |
+| Real-time analytics | ClickHouse | Planned: dashboard aggregations over events/GPS/costs |
 | Routing | Google Maps Platform | Directions + Distance Matrix + Geocoding for real road ETA |
 | Agent service | OpenRouter (go-agent semantics) | LLM tool loop: dispatch suggestions, anomaly summarization, report drafting |
 | Object store | S3-compatible | Task media (photo/voice/proof drafts) — presigned URLs only |
@@ -32,27 +35,26 @@ against local mock adapters; this backend is the production integration gate.
   JWKS (RS256), checking `iss`, `aud`, `exp`, and signature. JWKS is cached
   with a short TTL and refreshed on unknown `kid`.
 
-## Data model (TypeDB)
+## Data model (PostgreSQL)
 
-TypeDB 3.x is the system of record. The schema (TypeQL 3.0,
-`backend/crates/altius-schema/typeql/schema.tql`) mirrors the Zod contracts in
+PostgreSQL is the system of record. The schema lives in
+`backend/crates/altius-api/migrations/` and mirrors the Zod contracts in
 `packages/api-contracts`:
 
-- **Entities**: `organization`, `hub`, `user`, `task`, `stop`, `visit`,
-  `device-event`, `daily-report`, `cost-entry`, `vehicle`.
-- **Relations**: `membership` (org↔user with role), `hub-assignment`
-  (hub↔user), `dispatch` (task↔driver), `contains` (task↔stop),
-  `reports` (stop↔event), `submitted` (report↔driver).
-- Key attributes carry `@key`/`@unique` constraints (`task-id`,
-  `request-key`) so idempotency is enforced by the store, matching the mobile
-  `events.request_key` unique index.
-- Relations let anomaly review, LHS aggregation, and "who may see what"
-  resolve as graph traversals instead of join chains.
+- **Tables**: `organizations`, `hubs`, `users`, `teams`, `tasks`, `stops`,
+  `device_events`, `daily_reports`, `cost_entries`, `vehicle_checks`,
+  `vehicles`, `devices`, `gps_observations`, `gps_reviews`.
+- **Join tables**: `user_orgs`, `user_hubs`, `org_hubs`, `team_hubs`,
+  `team_members`, `task_assignments`, `hub_vehicles`, `user_devices`.
+- `device_events.request_key` is `UNIQUE (org_id, driver_sub, request_key)`,
+  matching the mobile `events.request_key` unique index.
+- Multi-statement writes (`create_task`, `record_event`) run inside explicit
+  transactions, preserving the atomicity the mobile `WorkStore` guarantees
+  locally.
 
-Transactions: writes (event append + task stage update) commit in a single
-write transaction, preserving the atomicity the mobile `WorkStore` guarantees
-locally. Read-only queries use read transactions; schema changes use schema
-transactions.
+TypeDB remains in `backend/crates/altius-schema` and
+`backend/crates/altius-api/src/store/typedb.rs` for future relation/inference
+workloads; it is not used by the default `STORE_BACKEND=postgres` path.
 
 ## Google Maps integration
 
@@ -100,10 +102,12 @@ Rust types in `altius-core` mirror them 1:1.
 ## Security posture
 
 - No credentials in the repo; all secrets via env (`KEYCLOAK_*`,
-  `TYPEDB_*`, `GOOGLE_MAPS_API_KEY`, `OPENROUTER_API_KEY`).
-- Tenant isolation is a query-time guarantee: every TypeDB pattern binds
-  `organization` from the authenticated principal, never from client input.
-- Events are immutable (TypeDB write-once + API refuses updates), matching
-  the mobile `events_no_update`/`events_no_delete` triggers.
+  `DATABASE_URL`, `GOOGLE_MAPS_API_KEY`, `OPENROUTER_API_KEY`; `TYPEDB_*`
+  only when `STORE_BACKEND=typedb`).
+- Tenant isolation is a query-time guarantee: every SQL statement binds
+  `org_id`/`driver_sub` resolved from the authenticated principal, never
+  from client input.
+- Events are immutable (API refuses updates; `device_events` is append-only),
+  matching the mobile `events_no_update`/`events_no_delete` triggers.
 - Rate limiting and body-size caps at the Axum layer; media uploads are
   presigned S3 URLs, never proxied.

@@ -5,7 +5,7 @@ import { Card, Field } from "@/components/ui";
 import { apiBase } from "@/data/api-adapter";
 import { accessToken, authConfig } from "@/lib/auth";
 
-const ROLES = ["admin", "supervisor", "lead", "driver"] as const;
+const ROLES = ["super-admin", "admin", "supervisor", "lead", "driver"] as const;
 
 interface Created {
   subject: string;

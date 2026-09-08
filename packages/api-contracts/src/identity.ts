@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { CoordinateSchema, IdSchema, TimeZoneSchema } from './primitives';
 
-export const RoleSchema = z.enum(['admin', 'supervisor', 'lead', 'driver']);
+export const RoleSchema = z.enum(['super-admin', 'admin', 'supervisor', 'lead', 'driver']);
 export const PermissionSchema = z.enum(['tasks.read', 'tasks.manage', 'tasks.execute', 'routes.read', 'routes.manage', 'lhs.read', 'lhs.submit', 'lhs.review', 'gps.review', 'users.manage', 'settings.manage']);
 const membershipFields = z.object({ tenantId: IdSchema, role: RoleSchema, hubIds: z.array(IdSchema).min(1).refine(ids => new Set(ids).size === ids.length, 'Duplicate hubs').readonly(), permissions: z.array(PermissionSchema).max(32).refine(p => new Set(p).size === p.length, 'Duplicate permissions').readonly() }).strict();
 export const MembershipSchema = membershipFields.readonly();

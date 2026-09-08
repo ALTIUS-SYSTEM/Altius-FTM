@@ -9,7 +9,10 @@ import { DEMO_DATE, DRIVERS } from "@/data/model";
 import type { DemoRecord } from "@/data/model";
 import { optimizeRoute, staticMapUrl, type OptimizedRoute } from "@/data/route-api";
 import { ProvisionUser } from "./provision-user";
-import { compareGpsStreams, evaluateCorridor, aggregateDaily } from "@altius/algos";
+import { HubsAdmin, OrganizationAdmin, TeamsAdmin } from "./admin-crud";
+import { aggregateDaily } from "@altius/algos";
+import { snapshot, markReviewed, type GpsReview } from "@/data/monitoring-api";
+import { listUsers, setUserRoles, ROLES, type User } from "@/data/admin-api";
 
 /* ---------- shared helpers ---------- */
 function SearchField({ value, onChange, placeholder = "Search" }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
@@ -194,17 +197,39 @@ export function Users() {
     {editing && <RecordEditor kind="user" onClose={() => setEditing(false)}/>}
   </>;
 }
-export function Teams() { const [editing, setEditing] = useState(false); return <><RecordTable kind="team" headings={["Team", "Shift", "Members", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No teams" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="team" onClose={() => setEditing(false)}/>}</>; }
+export function Teams() { return <TeamsAdmin/>; }
 export function Permissions() {
-  const { state, update } = useDemo();
-  const groups: Record<string, string[]> = { Tasks: ["view", "create", "edit", "complete", "assign"], Settings: ["users", "roles", "hubs", "organization"], Reports: ["lhs.review", "anomaly.review"] };
-  return <div className="grid-3">{Object.entries(groups).map(([g, perms]) => <Card key={g} title={g}>{perms.map(p => { const key = `${g}.${p}`; return <label key={key} className="check-row"><input type="checkbox" checked={state.permissions[key] ?? true} onChange={e => update(c => ({ ...c, permissions: { ...c.permissions, [key]: e.target.checked } }))}/>{p}</label>; })}</Card>)}<div className="info-box">Permission toggles persist locally for the demo only; they do not enforce access control.</div></div>;
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    listUsers()
+      .then(u => { if (live) setUsers(u); })
+      .catch(e => setError(e instanceof Error ? e.message : "Failed to load users."))
+      .finally(() => setLoading(false));
+    return () => { live = false; };
+  }, []);
+
+  const toggle = async (subject: string, role: string, checked: boolean) => {
+    const u = users.find(x => x.id === subject);
+    if (!u) return;
+    const next = checked ? [...new Set([...u.roles, role])] : u.roles.filter(r => r !== role);
+    setUsers(prev => prev.map(x => x.id === subject ? { ...x, roles: next } : x));
+    try {
+      await setUserRoles(subject, next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Role update failed.");
+      setUsers(prev => prev.map(x => x.id === subject ? u : x));
+    }
+  };
+
+  return <><Card title="Role assignment"><Table count={users.length} headings={["User", ...ROLES]}>{users.map(u => <tr key={u.id}><td>{u.name || u.id}</td>{ROLES.map(r => <td key={r}><input type="checkbox" checked={u.roles.includes(r)} onChange={e => toggle(u.id, r, e.target.checked)}/></td>)}</tr>)}</Table>{loading && <p>Loading users...</p>}{error && <p role="alert" className="error-banner">{error}</p>}</Card><div className="info-box">Roles are stored in Keycloak and enforced by the API. Changes here call the backend; they do not persist only in this browser.</div></>;
 }
-export function Hubs() { const [editing, setEditing] = useState(false); return <><RecordTable kind="hub" headings={["Hub", "Address", "Region", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No hubs" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="hub" onClose={() => setEditing(false)}/>}</>; }
-export function Organization() {
-  const { state, update } = useDemo();
-  return <Card title="Organization details"><div className="form-grid"><Field label="Name"><input value={state.organization.name} onChange={e => update(c => ({ ...c, organization: { ...c.organization, name: e.target.value } }))}/></Field><Field label="Currency"><select value={state.organization.currency} onChange={e => update(c => ({ ...c, organization: { ...c.organization, currency: e.target.value } }))}><option>IDR</option><option>USD</option></select></Field><Field label="Password expiry (days)"><input type="number" value={state.organization.passwordDays} onChange={e => update(c => ({ ...c, organization: { ...c.organization, passwordDays: e.target.value } }))}/></Field></div></Card>;
-}
+export function Hubs() { return <HubsAdmin/>; }
+export function Organization() { return <OrganizationAdmin/>; }
 export function CustomModule() { const [editing, setEditing] = useState(false); return <><RecordTable kind="module" headings={["Module", "Description", "Type", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No modules" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="module" onClose={() => setEditing(false)}/>}</>; }
 export function Trash() {
   const { state, update } = useDemo();
@@ -236,15 +261,36 @@ export function Lhs() {
 }
 
 /* ---------- anomaly + geofence (PRD c,e,f) ---------- */
-const APP_STREAM = [{ lat: -6.175, lng: 106.827, at: 1000, accuracyMeters: 8 }, { lat: -6.176, lng: 106.829, at: 31000, accuracyMeters: 10 }, { lat: -6.177, lng: 106.831, at: 61000, accuracyMeters: 9 }];
-const VEHICLE_STREAM = [{ lat: -6.1751, lng: 106.8271, at: 2000 }, { lat: -6.179, lng: 106.833, at: 32000 }, { lat: -6.1772, lng: 106.8312, at: 62000 }];
-const CORRIDOR = [{ lat: -6.174, lng: 106.826 }, { lat: -6.176, lng: 106.829 }, { lat: -6.178, lng: 106.832 }];
 export function Anomaly() {
-  const { state, update } = useDemo();
-  const result = compareGpsStreams({ app: APP_STREAM, vehicle: VEHICLE_STREAM }, { maxTimeGapMs: 10000, thresholdMeters: 150 });
-  const geo = evaluateCorridor(APP_STREAM, CORRIDOR, { radiusMeters: 100, consecutiveBreach: 2, maxAccuracyMeters: 50 });
-  const rows = DRIVERS.slice(0, 3).map((d, i) => ({ id: `an-${i}`, driver: d, variance: i === 1 ? result.varianceMeters : 12 + i * 18, matched: i === 1 ? result.matched : 3, flag: i === 1 ? result.flag : "none", status: state.reviews[`an-${i}`]?.status ?? "Open" }));
-  return <><div className="metric-grid"><Metric label="Comparisons" value={rows.length} detail="Synthetic samples"/><Metric label="Flagged" value={rows.filter(r => r.flag === "review").length} detail="Above 150 m threshold" tone="danger"/><Metric label="Max variance" value={`${result.varianceMeters} m`} detail="App vs vehicle GPS"/><Metric label="Geofence" value={geo.offRoute ? "Off-route" : "On route"} detail={`Corridor check: ${geo.reason}`} tone={geo.offRoute ? "danger" : "primary"}/></div>
-  <Card title="App vs vehicle GPS comparison"><Table count={rows.length} headings={["Driver", "Variance", "Matched samples", "Signal", "Review", "Actions"]}>{rows.map(r => <tr key={r.id}><td>{r.driver}</td><td>{r.variance} m</td><td>{r.matched}</td><td><Badge tone={r.flag === "review" ? "failed" : "completed"}>{r.flag}</Badge></td><td><Badge tone={r.status === "Resolved" ? "completed" : "assigned"}>{r.status}</Badge></td><td><button onClick={() => update(c => ({ ...c, reviews: { ...c.reviews, [r.id]: { status: "Resolved", note: "" } } }), "Marked resolved locally.")}>Resolve</button></td></tr>)}</Table></Card>
-  <div className="info-box"><strong>Simulation only.</strong> Missing or unmatched samples are reported as insufficient data, never as fraud. Flags mean "review", not proof. Geofence uses corridor distance with a 2-sample hysteresis and 50 m accuracy gate.</div></>;
+  const [rows, setRows] = useState<GpsReview[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    snapshot()
+      .then(data => {
+        if (live) setRows(data.reviews);
+      })
+      .catch(e => setError(e instanceof Error ? e.message : "Failed to load monitoring data."))
+      .finally(() => setLoading(false));
+    return () => { live = false; };
+  }, []);
+
+  const flagged = rows.filter(r => r.classification === "review_required").length;
+  const maxVariance = rows.reduce((m, r) => Math.max(m, r.variance), 0);
+  const handleResolve = async (id: string) => {
+    try {
+      await markReviewed(id);
+      setRows(prev => prev.map(r => r.id === id ? { ...r, reviewedBy: "me" } : r));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to mark reviewed.");
+    }
+  };
+
+  return <><div className="metric-grid"><Metric label="Comparisons" value={rows.length} detail="Live comparisons"/><Metric label="Flagged" value={flagged} detail="Above threshold" tone={flagged ? "danger" : "primary"}/><Metric label="Max variance" value={`${maxVariance} m`} detail="App vs vehicle GPS"/><Metric label="Vehicles" value={loading ? "..." : "live"} detail="McEasy-linked" tone="primary"/></div>
+  {error && <p role="alert" className="error-banner">{error}</p>}
+  <Card title="App vs vehicle GPS comparison"><Table count={rows.length} headings={["Driver", "Vehicle", "Variance", "Reason", "Review", "Actions"]}>{rows.map(r => <tr key={r.id}><td>{r.driver}</td><td>{r.vehicle || "—"}</td><td>{r.variance} m</td><td><Badge tone={r.classification === "review_required" ? "failed" : r.classification === "insufficient_data" ? "assigned" : "completed"}>{r.reason || r.classification}</Badge></td><td><Badge tone={r.reviewedBy ? "completed" : "assigned"}>{r.reviewedBy ? "Resolved" : "Open"}</Badge></td><td><button disabled={!!r.reviewedBy} onClick={() => handleResolve(r.id)}>Resolve</button></td></tr>)}</Table></Card>
+  <div className="info-box"><strong>Live data.</strong> Missing or unmatched samples are reported as insufficient data, never as fraud. Flags mean "review", not proof. Geofence uses corridor distance with a 2-sample hysteresis and 50 m accuracy gate.</div></>;
 }

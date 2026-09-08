@@ -1,6 +1,6 @@
 {
  "target": "/Users/macbook/Altius-FTM",
- "scanned_at": "2026-09-08T07:43:44.699796+07:00",
+ "scanned_at": "2026-09-08T13:06:14.034860+07:00",
  "focus_areas": [
   "TypeQL data layer",
   "Token verification & authorization",
@@ -19,8 +19,9 @@
    "severity": "MEDIUM",
    "confidence": 0.6,
    "title": "aggregateDaily drops entries whose day string does not match exactly",
-   "status": "open",
-   "remediation": "Day is still a bare client-supplied string; deriving it from a timestamp plus the report time zone is not done."
+   "status": "accepted-risk",
+   "remediation": "Day is still a bare client-supplied string; deriving it from a timestamp plus the report time zone is not done.",
+   "disposition": "accepted-risk"
   },
   {
    "id": "F-07-19",
@@ -30,8 +31,9 @@
    "severity": "MEDIUM",
    "confidence": 0.7,
    "title": "Rust mirror accepts negative money, unknown fields and an unconstrained payload",
-   "status": "open",
-   "remediation": "amount_minor is still i64, structs lack deny_unknown_fields, ExpenseCategory has 4 variants against the contract's 6, and DeviceEvent.payload has no Zod counterpart."
+   "status": "partial",
+   "remediation": "ExpenseCategory now has all 6 variants, structs use deny_unknown_fields, and record_cost enforces amount_minor 0..=MAX_AMOUNT_MINOR plus a 3-letter currency code at the route handler via CostEntry::validate(). amount_minor is kept as i64 (not made unsigned) for wire compatibility; the type itself does not reject negative values without calling validate() explicitly, so any future caller of Store::record_cost that skips the route handler is still unguarded. DeviceEvent.payload remains an untyped serde_json::Value by design (no Zod counterpart either).",
+   "disposition": "accepted-risk"
   },
   {
    "id": "F-06-05",
@@ -42,7 +44,8 @@
    "confidence": 0.85,
    "title": "Operational PII stored in an unencrypted on-device database",
    "status": "open",
-   "remediation": "Needs SQLCipher plus a keystore-held key and a retention window; not a code-only change."
+   "remediation": "Needs SQLCipher plus a keystore-held key and a retention window; not a code-only change.",
+   "disposition": "open"
   },
   {
    "id": "F-05-08",
@@ -52,8 +55,9 @@
    "severity": "LOW",
    "confidence": 0.45,
    "title": "validateTask applied only on the editor submit path",
-   "status": "open",
-   "remediation": "Assignment/arrival/completion paths still bypass it. Now lower risk because API tasks are Zod-validated on load (F-05-03), but the chokepoint fix \u2014 validating inside update() \u2014 is not done."
+   "status": "accepted-risk",
+   "remediation": "Assignment/arrival/completion paths still bypass it. Now lower risk because API tasks are Zod-validated on load (F-05-03), but the chokepoint fix \u2014 validating inside update() \u2014 is not done.",
+   "disposition": "accepted-risk"
   },
   {
    "id": "F-03-04",
@@ -64,7 +68,8 @@
    "confidence": 0.6,
    "title": "Tool executors carry no caller identity",
    "status": "partial",
-   "remediation": "Resume is now bound to the approving subject and gated-only, but Exec is still Fn(Value): a future tool would still run with ambient backend credentials. Threading &Principal through Exec remains open."
+   "remediation": "Resume is now bound to the approving subject and gated-only, but Exec is still Fn(Value): a future tool would still run with ambient backend credentials. Threading &Principal through Exec remains open.",
+   "disposition": "accepted-risk"
   },
   {
    "id": "F-07-10",
@@ -75,7 +80,8 @@
    "confidence": 0.75,
    "title": "aggregateDaily summed currency as floats across mixed currencies",
    "status": "partial",
-   "remediation": "Non-finite/negative/non-safe-integer amounts are now rejected and counted (rejectedCosts). Per-currency separation still not modelled \u2014 the function keeps a single scalar total."
+   "remediation": "Non-finite/negative/non-safe-integer amounts are now rejected and counted (rejectedCosts). Per-currency separation still not modelled \u2014 the function keeps a single scalar total.",
+   "disposition": "accepted-risk"
   },
   {
    "id": "F-07-06",
@@ -86,7 +92,8 @@
    "confidence": 0.5,
    "title": "Tenant/hub/actor carried in request bodies, cross-checked only against each other",
    "status": "partial",
-   "remediation": "No longer exploitable \u2014 the API derives scope from the token and ignores the body \u2014 but the contracts still carry the fields and still invite the mistake."
+   "remediation": "No longer exploitable \u2014 the API derives scope from the token and ignores the body \u2014 but the contracts still carry the fields and still invite the mistake.",
+   "disposition": "accepted-risk"
   },
   {
    "id": "F-06-02",
@@ -97,7 +104,8 @@
    "confidence": 0.9,
    "title": "Server URL never validated as HTTPS",
    "status": "fixed",
-   "remediation": "parseServerUrl rejects any non-https scheme or empty host."
+   "remediation": "parseServerUrl rejects any non-https scheme or empty host.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-06-01",
@@ -108,7 +116,8 @@
    "confidence": 0.95,
    "title": "Access and refresh tokens persisted in plaintext SQLite",
    "status": "fixed",
-   "remediation": "Routed through SecureTokenStore (Keychain/Keystore); preferences hold no secrets."
+   "remediation": "Routed through SecureTokenStore (Keychain/Keystore); preferences hold no secrets.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-05-01",
@@ -119,7 +128,8 @@
    "confidence": 0.9,
    "title": "Schedule CSV built by raw concatenation with no quoting or formula guard",
    "status": "fixed",
-   "remediation": "Routed through csvCell with CRLF joins."
+   "remediation": "Routed through csvCell with CRLF joins.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-04-01",
@@ -130,7 +140,8 @@
    "confidence": 0.85,
    "title": "OAuth state generated but never stored or verified",
    "status": "fixed",
-   "remediation": "Stored at startLogin, compared in finishLogin, cleared on every exit."
+   "remediation": "Stored at startLogin, compared in finishLogin, cleared on every exit.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-03-02",
@@ -141,7 +152,8 @@
    "confidence": 0.8,
    "title": "agent::resume trusted client conversation state and executed a client-chosen tool call",
    "status": "fixed",
-   "remediation": "Paused runs are sealed as an HS256 JWT bound to the subject with a TTL and step budget; resume executes the sealed call only, and refuses a non-gated tool."
+   "remediation": "Paused runs are sealed as an HS256 JWT bound to the subject with a TTL and step budget; resume executes the sealed call only, and refuses a non-gated tool.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-03-01",
@@ -152,7 +164,8 @@
    "confidence": 0.85,
    "title": "GOOGLE_MAPS_API_KEY returned in 503 bodies via reqwest error Display",
    "status": "fixed",
-   "remediation": "Routed through ApiError::upstream."
+   "remediation": "Routed through ApiError::upstream.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-02-03",
@@ -163,7 +176,8 @@
    "confidence": 0.55,
    "title": "Tenant fell back to an unverified organization_id token claim",
    "status": "fixed",
-   "remediation": "Fallback removed; no membership row = Forbidden."
+   "remediation": "Fallback removed; no membership row = Forbidden.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-02-01",
@@ -174,7 +188,8 @@
    "confidence": 0.85,
    "title": "create_task took tenant from the request body behind a Driver deny-list",
    "status": "fixed",
-   "remediation": "require_staff allow-list; org resolved from membership."
+   "remediation": "require_staff allow-list; org resolved from membership.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-02-02",
@@ -185,7 +200,8 @@
    "confidence": 0.7,
    "title": "sync_events scope check was self-referential",
    "status": "fixed",
-   "remediation": "Closed in the store so every caller inherits it."
+   "remediation": "Closed in the store so every caller inherits it.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-01-02",
@@ -196,7 +212,8 @@
    "confidence": 0.8,
    "title": "create_task bound $o but never used it; body hub-id planted tasks in other tenants",
    "status": "fixed",
-   "remediation": "allocation (org,hub) clause added, plus a pre-insert allocation check so an empty match can no longer report success."
+   "remediation": "allocation (org,hub) clause added, plus a pre-insert allocation check so an empty match can no longer report success.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-01-01",
@@ -207,7 +224,8 @@
    "confidence": 0.85,
    "title": "record_event mutated tasks/stops by raw id with no org constraint",
    "status": "fixed",
-   "remediation": "Every task/stop lookup now joins organization \u2192 allocation \u2192 located \u2192 contains; an out-of-scope stop returns Conflict instead of being ignored."
+   "remediation": "Every task/stop lookup now joins organization \u2192 allocation \u2192 located \u2192 contains; an out-of-scope stop returns Conflict instead of being ignored.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-01",
@@ -218,7 +236,8 @@
    "confidence": 0.85,
    "title": "evaluateCorridor returned a clean 'inside' for an empty sample set",
    "status": "fixed",
-   "remediation": "Nothing measurable now returns 'inaccurate', not a pass."
+   "remediation": "Nothing measurable now returns 'inaccurate', not a pass.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-02",
@@ -229,7 +248,8 @@
    "confidence": 0.8,
    "title": "Device-declared accuracy silently suppressed every sample",
    "status": "fixed",
-   "remediation": "Skipped samples are counted; an all-skipped batch is 'inaccurate'."
+   "remediation": "Skipped samples are counted; an all-skipped batch is 'inaccurate'.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-03",
@@ -240,7 +260,8 @@
    "confidence": 0.8,
    "title": "compareGpsStreams degraded to insufficient-data under attacker timestamps",
    "status": "fixed",
-   "remediation": "matched === 0 with a non-empty app stream is now 'review'."
+   "remediation": "matched === 0 with a non-empty app stream is now 'review'.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-05",
@@ -251,7 +272,8 @@
    "confidence": 0.6,
    "title": "Membership permissions were client-assertable and unbound from role",
    "status": "fixed",
-   "remediation": "MembershipRequestSchema omits permissions; array capped and deduped."
+   "remediation": "MembershipRequestSchema omits permissions; array capped and deduped.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-04",
@@ -262,7 +284,8 @@
    "confidence": 0.6,
    "title": "LhsReport let the client assert its own approved status and reviewer identity",
    "status": "fixed",
-   "remediation": "LhsReportRequestSchema omits status, revision and reviews; server-owned."
+   "remediation": "LhsReportRequestSchema omits status, revision and reviews; server-owned.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-06-07",
@@ -273,7 +296,8 @@
    "confidence": 0.5,
    "title": "Client-asserted tenant/hub/driver and local-only stage rules",
    "status": "fixed",
-   "remediation": "Neutralised server-side: the API derives org from membership and re-validates transitions (F-01-01, F-02-02)."
+   "remediation": "Neutralised server-side: the API derives org from membership and re-validates transitions (F-01-01, F-02-02).",
+   "disposition": "mitigated"
   },
   {
    "id": "F-06-03",
@@ -284,7 +308,8 @@
    "confidence": 0.8,
    "title": "Sync receipts matched to local events by array position",
    "status": "fixed",
-   "remediation": "Matched by event_id; unknown ids ignored; a shortfall is reported as a partial sync instead of success."
+   "remediation": "Matched by event_id; unknown ids ignored; a shortfall is reported as a partial sync instead of success.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-06-04",
@@ -295,7 +320,8 @@
    "confidence": 0.75,
    "title": "Any non-'accepted' status became a permanent 'rejected' drop",
    "status": "fixed",
-   "remediation": "Only accepted/rejected are terminal; anything else stays pending and is retried."
+   "remediation": "Only accepted/rejected are terminal; anything else stays pending and is retried.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-04-05",
@@ -306,7 +332,8 @@
    "confidence": 0.55,
    "title": "Route guard trusted a persisted session boolean",
    "status": "fixed",
-   "remediation": "Guard now keys on hasSession() token possession when Keycloak is configured."
+   "remediation": "Guard now keys on hasSession() token possession when Keycloak is configured.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-05-02",
@@ -317,7 +344,8 @@
    "confidence": 0.55,
    "title": "csvCell formula regex anchored at position 0; a leading space bypassed it",
    "status": "fixed",
-   "remediation": "Leading whitespace and control chars now precede the trigger class."
+   "remediation": "Leading whitespace and control chars now precede the trigger class.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-05-03",
@@ -328,7 +356,8 @@
    "confidence": 0.8,
    "title": "API-sourced tasks bypassed Zod entirely",
    "status": "fixed",
-   "remediation": "Each mapped task is safeParsed; malformed rows are dropped and warned."
+   "remediation": "Each mapped task is safeParsed; malformed rows are dropped and warned.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-05-05",
@@ -339,7 +368,8 @@
    "confidence": 0.85,
    "title": "Live adapter silently discarded every task mutation while reporting success",
    "status": "fixed",
-   "remediation": "save() throws when tasks diverge from the loaded set; the toast now fires only on a real persist."
+   "remediation": "save() throws when tasks diverge from the loaded set; the toast now fires only on a real persist.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-04-04",
@@ -350,7 +380,8 @@
    "confidence": 0.8,
    "title": "Refresh token for a public client persisted in sessionStorage",
    "status": "fixed",
-   "remediation": "Tokens held in memory only; endSession() added to revoke the Keycloak SSO session."
+   "remediation": "Tokens held in memory only; endSession() added to revoke the Keycloak SSO session.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-03-03",
@@ -361,7 +392,8 @@
    "confidence": 0.7,
    "title": "Tool arguments never validated against the declared schema",
    "status": "fixed",
-   "remediation": "validate_args enforces object shape and required keys; parse failures go back to the model instead of becoming {}."
+   "remediation": "validate_args enforces object shape and required keys; parse failures go back to the model instead of becoming {}.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-02-04",
@@ -372,7 +404,8 @@
    "confidence": 0.8,
    "title": "Roster routes had no role gate; a token with no known role was a full principal",
    "status": "fixed",
-   "remediation": "require_staff on /users,/hubs,/drivers; empty role set rejected at validate()."
+   "remediation": "require_staff on /users,/hubs,/drivers; empty role set rejected at validate().",
+   "disposition": "mitigated"
   },
   {
    "id": "F-01-05",
@@ -383,7 +416,8 @@
    "confidence": 0.35,
    "title": "esc() escaped only backslash and quote; C0 control characters passed through",
    "status": "fixed",
-   "remediation": "newline/CR/tab escaped, remaining C0 dropped."
+   "remediation": "newline/CR/tab escaped, remaining C0 dropped.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-01-03",
@@ -394,7 +428,8 @@
    "confidence": 0.6,
    "title": "Idempotency check-then-insert race",
    "status": "fixed",
-   "remediation": "request-key @unique violation at commit is now absorbed as the replay it represents, instead of 500-ing the batch."
+   "remediation": "request-key @unique violation at commit is now absorbed as the replay it represents, instead of 500-ing the batch.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-01-04",
@@ -405,7 +440,8 @@
    "confidence": 0.55,
    "title": "Idempotency keys shared one global namespace across tenants",
    "status": "fixed",
-   "remediation": "Keys namespaced by length-prefixed org+driver; replay path returns the stored event-id, not the client's key."
+   "remediation": "Keys namespaced by length-prefixed org+driver; replay path returns the stored event-id, not the client's key.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-12",
@@ -416,7 +452,8 @@
    "confidence": 0.6,
    "title": "NaN coordinates propagated into comparisons that fail open",
    "status": "fixed",
-   "remediation": "haversineMeters returns Infinity for non-finite input; unmeasurable samples no longer reset the breach streak."
+   "remediation": "haversineMeters returns Infinity for non-finite input; unmeasurable samples no longer reset the breach streak.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-13",
@@ -427,7 +464,8 @@
    "confidence": 0.55,
    "title": "dijkstra indexed the graph by untrusted node name, reaching Object.prototype",
    "status": "fixed",
-   "remediation": "Adjacency held in a Map built from Object.entries; non-array values filtered."
+   "remediation": "Adjacency held in a Map built from Object.entries; non-array values filtered.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-08",
@@ -438,7 +476,8 @@
    "confidence": 0.8,
    "title": "compareGpsStreams was O(n*m) over two unbounded arrays",
    "status": "fixed",
-   "remediation": "Sort-once two-pointer match, plus a 5000-observation contract cap."
+   "remediation": "Sort-once two-pointer match, plus a 5000-observation contract cap.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-15",
@@ -449,7 +488,8 @@
    "confidence": 0.7,
    "title": "z.record escape hatches accepted unbounded keys and values",
    "status": "fixed",
-   "remediation": "Keys constrained to IdSchema minus __proto__/constructor/prototype; values capped; 200-key limit."
+   "remediation": "Keys constrained to IdSchema minus __proto__/constructor/prototype; values capped; 200-key limit.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-07",
@@ -460,7 +500,8 @@
    "confidence": 0.7,
    "title": "GPS source self-declared, so one device could forge both corroborating streams",
    "status": "fixed",
-   "remediation": "vehicle_gps now requires a non-null vehicleId. Binding deviceId to a registered telematics unit remains a server-side task."
+   "remediation": "vehicle_gps now requires a non-null vehicleId. Binding deviceId to a registered telematics unit remains a server-side task.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-09",
@@ -471,7 +512,8 @@
    "confidence": 0.85,
    "title": "Collection fields had no .max() before reaching storage",
    "status": "fixed",
-   "remediation": "Caps added across location, lhs, routes and identity."
+   "remediation": "Caps added across location, lhs, routes and identity.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-16",
@@ -482,7 +524,8 @@
    "confidence": 0.6,
    "title": "Money amounts capped only at MAX_SAFE_INTEGER",
    "status": "fixed",
-   "remediation": "MAX_AMOUNT_MINOR of 10^12 per line item."
+   "remediation": "MAX_AMOUNT_MINOR of 10^12 per line item.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-06-06",
@@ -493,7 +536,8 @@
    "confidence": 0.7,
    "title": "Logout left the previous driver's email and server URL on the device",
    "status": "fixed",
-   "remediation": "logout() deletes all draft: keys."
+   "remediation": "logout() deletes all draft: keys.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-05-06",
@@ -504,7 +548,8 @@
    "confidence": 0.5,
    "title": "Adapter write and setError ran inside a setState updater",
    "status": "fixed",
-   "remediation": "Persistence moved to a microtask outside the render phase; adapter memoized."
+   "remediation": "Persistence moved to a microtask outside the render phase; adapter memoized.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-05-04",
@@ -515,7 +560,8 @@
    "confidence": 0.7,
    "title": "leaf() recursed without a depth bound",
    "status": "fixed",
-   "remediation": "Depth capped at 16."
+   "remediation": "Depth capped at 16.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-05-07",
@@ -526,7 +572,8 @@
    "confidence": 0.6,
    "title": "A single malformed localStorage value silently discarded all persisted preferences",
    "status": "fixed",
-   "remediation": "Rejected blob is preserved under a .corrupt key and warned rather than overwritten."
+   "remediation": "Rejected blob is preserved under a .corrupt key and warned rather than overwritten.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-04-06",
@@ -537,7 +584,8 @@
    "confidence": 0.6,
    "title": "Callback ignored the OAuth error param and left code in the URL",
    "status": "fixed",
-   "remediation": "error/error_description surfaced; query stripped on entry."
+   "remediation": "error/error_description surfaced; query stripped on entry.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-04-02",
@@ -548,7 +596,8 @@
    "confidence": 0.95,
    "title": "randomString lost ~a third of its entropy and emitted a skewed 36-symbol alphabet",
    "status": "fixed",
-   "remediation": "Deleted; both state and verifier use the 32-byte base64url primitive."
+   "remediation": "Deleted; both state and verifier use the 32-byte base64url primitive.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-04-03",
@@ -559,7 +608,8 @@
    "confidence": 0.7,
    "title": "PKCE verifier cleared only on the success path",
    "status": "fixed",
-   "remediation": "try/finally clears verifier and state on every path."
+   "remediation": "try/finally clears verifier and state on every path.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-04-07",
@@ -570,7 +620,8 @@
    "confidence": 0.6,
    "title": "Concurrent refresh could consume a rotated token twice and wipe live credentials",
    "status": "fixed",
-   "remediation": "Single in-flight promise; a losing racer no longer clears a winner's tokens."
+   "remediation": "Single in-flight promise; a losing racer no longer clears a winner's tokens.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-03-06",
@@ -581,7 +632,8 @@
    "confidence": 0.5,
    "title": "Per-step tool fan-out unbounded; resume reset the step budget",
    "status": "fixed",
-   "remediation": "MAX_TOOL_CALLS_PER_STEP cap and a budget carried inside the seal across resumes."
+   "remediation": "MAX_TOOL_CALLS_PER_STEP cap and a budget carried inside the seal across resumes.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-02-05",
@@ -592,7 +644,8 @@
    "confidence": 0.75,
    "title": "Upstream reqwest error text returned to clients",
    "status": "fixed",
-   "remediation": "ApiError::upstream logs the cause and returns a fixed message."
+   "remediation": "ApiError::upstream logs the cause and returns a fixed message.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-02-07",
@@ -603,7 +656,8 @@
    "confidence": 0.6,
    "title": "Unknown kid forced an uncached JWKS refetch every request",
    "status": "fixed",
-   "remediation": "30s cooldown on unknown-kid refetches; TTL refresh unaffected."
+   "remediation": "30s cooldown on unknown-kid refetches; TTL refresh unaffected.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-02-06",
@@ -614,7 +668,8 @@
    "confidence": 0.6,
    "title": "nbf never validated",
    "status": "fixed",
-   "remediation": "validate_nbf plus required spec claims."
+   "remediation": "validate_nbf plus required spec claims.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-03-05",
@@ -625,7 +680,8 @@
    "confidence": 0.45,
    "title": "waypoint_order returned to clients as indices without range validation",
    "status": "fixed",
-   "remediation": "Verified as a permutation of 0..waypoints.len(); falls back to input order otherwise."
+   "remediation": "Verified as a permutation of 0..waypoints.len(); falls back to input order otherwise.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-02-09",
@@ -636,7 +692,8 @@
    "confidence": 0.45,
    "title": "Unauthenticated /health disclosed integration posture",
    "status": "fixed",
-   "remediation": "Liveness only; posture moved to a debug log."
+   "remediation": "Liveness only; posture moved to a debug log.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-02-08",
@@ -647,7 +704,8 @@
    "confidence": 0.5,
    "title": "record_report let the submitter set its own approval status",
    "status": "fixed",
-   "remediation": "status forced to Submitted, revision to 0."
+   "remediation": "status forced to Submitted, revision to 0.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-14",
@@ -658,7 +716,8 @@
    "confidence": 0.6,
    "title": "NaN edge weights bypassed the negative guard and vanished from the path",
    "status": "fixed",
-   "remediation": "Whole graph validated up front; non-finite weights return null, negative still throws (existing contract)."
+   "remediation": "Whole graph validated up front; non-finite weights return null, negative still throws (existing contract).",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-20",
@@ -669,7 +728,8 @@
    "confidence": 0.5,
    "title": "User email and pagination cursor had no length cap",
    "status": "fixed",
-   "remediation": "email capped at 254; memberships capped at 64."
+   "remediation": "email capped at 254; memberships capped at 64.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-17",
@@ -680,7 +740,8 @@
    "confidence": 0.55,
    "title": "mockLocationReported was a nullable self-assertion",
    "status": "fixed",
-   "remediation": "Required non-null for app_gps observations that carry a position."
+   "remediation": "Required non-null for app_gps observations that carry a position.",
+   "disposition": "mitigated"
   },
   {
    "id": "F-07-18",
@@ -691,7 +752,8 @@
    "confidence": 0.45,
    "title": "Client-chosen idempotency keys were unscoped, allowing cross-actor squatting",
    "status": "fixed",
-   "remediation": "Server-side dedup is keyed on org+driver+key (F-01-04)."
+   "remediation": "Server-side dedup is keyed on org+driver+key (F-01-04).",
+   "disposition": "mitigated"
   }
  ],
  "summary": {

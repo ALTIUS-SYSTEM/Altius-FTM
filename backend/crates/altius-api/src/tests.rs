@@ -4,21 +4,25 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
+use crate::AppState;
 use crate::auth::Jwks;
 use crate::config::{Config, KeycloakConfig};
-use crate::AppState;
 
 fn test_state() -> Arc<AppState> {
     let config = Config {
         keycloak_admin: None,
         notify: None,
-        fcm_api_key: None,
+        mceasy: None,
+        fcm_project_id: None,
+        fcm_credentials_path: None,
         keycloak: KeycloakConfig {
             issuer: "https://sso.example.com/realms/test".into(),
             jwks_url_override: None,
             token_url: "https://sso.example.com/realms/test/protocol/openid-connect/token".into(),
             audience: "altius".into(),
         },
+        store_backend: crate::config::StoreBackend::Postgres,
+        database_url: String::new(),
         typedb_database: "test".into(),
         google_maps_api_key: None,
         google_route_mode: crate::config::GoogleRouteMode::Directions,
@@ -34,6 +38,9 @@ fn test_state() -> Arc<AppState> {
         default_admin_sub: "admin".into(),
     };
     Arc::new(AppState {
+        mceasy_client: None,
+        fcm_client: None,
+        metrics: Arc::new(crate::metrics::Metrics::new().unwrap()),
         jwks: Jwks::new(config.keycloak.clone()),
         config,
         http: reqwest::Client::new(),

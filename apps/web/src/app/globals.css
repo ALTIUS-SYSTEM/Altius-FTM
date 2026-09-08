@@ -1,7 +1,11 @@
 :root {
   --surface: #f5fafd; --surface-low: #eff4f8; --surface-high: #e3e9ec; --card: #ffffff;
-  --text: #171c1f; --muted: #3d494d; --outline: #6d797e; --border: #bcc8ce;
+  --text: #171c1f; --muted: #3d494d; --outline: #687479; --border: #7b939f;
   --teal: #00677e; --cyan: #0fb4da; --cyan-dark: #004151; --slate: #3a6473;
+  /* Focus indicator. Separate from --cyan because --cyan is the primary
+     button background; darkening that would drop its label below 4.5:1.
+     #0d9cbd is the same hue at 3.23:1 on card and 3.07:1 on surface. */
+  --focus: #0d9cbd;
   --amber: #e3942c; --amber-dark: #573300; --danger: #ba1a1a; --danger-bg: #ffdad6;
   --radius: 16px; --radius-lg: 32px;
   --font-display: "Geist", system-ui, sans-serif;
@@ -21,9 +25,9 @@ button.primary, .link-btn.primary { background: var(--cyan); border-color: var(-
 button.danger { color: var(--danger); border-color: var(--danger); }
 button.wide-btn { width: 100%; justify-content: center; margin-top: 12px; }
 input, select, textarea { font: inherit; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--text); min-height: 40px; }
-input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 :focus { outline: none; }
-:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .skip-link { position: absolute; left: -999px; top: 8px; background: var(--teal); color: #fff; padding: 10px 18px; border-radius: 12px; z-index: 1000; }
 .skip-link:focus { left: 8px; }
@@ -196,14 +200,30 @@ dialog.modal::backdrop { background: rgba(15,30,38,.45); }
 .login-form > p { color: var(--muted); }
 .login-submit { justify-content: center; }
 
+.nav-toggle, .nav-close, .nav-backdrop { display: none; }
 @media (max-width: 960px) {
   .grid-2, .grid-3, .split, .login-page, .form-grid { grid-template-columns: 1fr; }
-  .sidebar { position: fixed; z-index: 50; }
-  .workspace:not(.collapsed) .sidebar { width: 232px; }
-  .workspace .sidebar { width: 68px; flex-basis: 68px; }
+  /* Drawer, not an overlay pinned open: slide it off-canvas and let the
+     backdrop, Escape, or a nav choice dismiss it. */
+  .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 60; transform: translateX(-100%); transition: transform 200ms ease; }
+  /* translateX(0), not `none`: transitioning to the `none` keyword is not a
+     smooth interpolation from a translate, and the drawer stays off-canvas. */
+  .workspace.nav-open .sidebar { transform: translateX(0); box-shadow: 0 0 44px rgba(0, 20, 28, .38); }
+  /* Neutralise the desktop collapse widths so the drawer is always readable. */
+  .workspace .sidebar, .workspace.collapsed .sidebar, .workspace:not(.collapsed) .sidebar { width: 264px; flex-basis: 264px; }
+  .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 20, 28, .45); border: 0; border-radius: 0; padding: 0; min-height: 0; }
+  .nav-toggle, .nav-close { display: inline-flex; }
+  .collapse-button { display: none; }
   .main-shell { margin-left: 0; }
   .search-field input { min-width: 120px; }
+  /* Header controls were 32-36px; below the 44px comfortable touch target. */
+  .hub-select select, .language-select { min-height: 44px; }
+  .demo-banner button { min-height: 44px; }
+  .icon-button { min-height: 44px; min-width: 44px; justify-content: center; }
+  .nav-item { min-height: 44px; }
+  .tabs a { min-height: 44px; display: inline-flex; align-items: center; }
 }
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
 @media (prefers-reduced-motion: reduce) { * { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
 
 .route-map { width: 100%; height: auto; display: block; border-radius: 10px; }

@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::ApiError;
 
@@ -157,7 +157,17 @@ pub async fn run(
             name: None,
         },
     ];
-    drive(http, api_key, model, tools, &mut messages, secret, subject, MAX_STEPS).await
+    drive(
+        http,
+        api_key,
+        model,
+        tools,
+        &mut messages,
+        secret,
+        subject,
+        MAX_STEPS,
+    )
+    .await
 }
 
 /// Resume a paused run: `approved` feeds the gated call's result back into
@@ -200,8 +210,7 @@ pub async fn resume(
             match (tool.exec)(pending_call.arguments.clone()).await {
                 ToolOutput::Executed(v) => v.to_string(),
                 ToolOutput::AwaitingApproval => {
-                    let state =
-                        seal(secret, subject, &messages, &pending_call, sealed.steps_left)?;
+                    let state = seal(secret, subject, &messages, &pending_call, sealed.steps_left)?;
                     return Ok(AgentRun::AwaitingApproval {
                         call: pending_call,
                         state,
@@ -279,7 +288,6 @@ async fn drive(
     subject: &str,
     steps_left: usize,
 ) -> Result<AgentRun, ApiError> {
-
     let tool_defs: Vec<Value> = tools
         .iter()
         .map(|t| {
@@ -330,8 +338,27 @@ async fn drive(
             return Ok(AgentRun::Finished(text));
         }
 
-        let _over_budget = calls.len() > MAX_TOOL_CALLS_PER_STEP;
-        for call in calls.into_iter().take(MAX_TOOL_CALLS_PER_STEP) {
+        // Every tool_call in the assistant message the model just sent needs a
+        // matching `tool` message in the next request, or the upstream chat
+        // completion is malformed on the *following* turn. Calls beyond the
+        // per-step cap must still get an explicit result, not be silently
+        // omitted.
+        let (in_budget, over_budget): (Vec<_>, Vec<_>) = calls
+            .into_iter()
+            .enumerate()
+            .partition(|(i, _)| *i < MAX_TOOL_CALLS_PER_STEP);
+        for (_, call) in over_budget {
+            messages.push(Message {
+                role: "tool".into(),
+                content: Some(
+                    json!({"error": "tool call skipped: per-step limit exceeded"}).to_string(),
+                ),
+                tool_calls: None,
+                tool_call_id: Some(call.id.clone()),
+                name: Some(call.function.name.clone()),
+            });
+        }
+        for (_, call) in in_budget {
             let tool = tools.iter().find(|t| t.name == call.function.name);
             let Some(tool) = tool else {
                 messages.push(Message {
@@ -353,11 +380,13 @@ async fn drive(
                     arguments: args,
                 };
                 let state = seal(secret, subject, messages, &pending, remaining)?;
-                return Ok(AgentRun::AwaitingApproval { call: pending, state });
+                return Ok(AgentRun::AwaitingApproval {
+                    call: pending,
+                    state,
+                });
             }
 
-            let args: Value =
-                serde_json::from_str(&call.function.arguments).unwrap_or(json!({}));
+            let args: Value = serde_json::from_str(&call.function.arguments).unwrap_or(json!({}));
             let output = (tool.exec)(args.clone()).await;
             let content = match output {
                 ToolOutput::Executed(v) => v.to_string(),
@@ -368,7 +397,10 @@ async fn drive(
                         arguments: args,
                     };
                     let state = seal(secret, subject, messages, &pending, remaining)?;
-                    return Ok(AgentRun::AwaitingApproval { call: pending, state });
+                    return Ok(AgentRun::AwaitingApproval {
+                        call: pending,
+                        state,
+                    });
                 }
             };
             messages.push(Message {

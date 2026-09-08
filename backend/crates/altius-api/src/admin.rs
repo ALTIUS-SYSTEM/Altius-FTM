@@ -47,7 +47,9 @@ impl<'a> AdminClient<'a> {
             .map_err(|e| ApiError::upstream("identity provider", e))?;
         if !res.status().is_success() {
             tracing::error!(status = %res.status(), "keycloak admin token request failed");
-            return Err(ApiError::Unavailable("identity provider unavailable".into()));
+            return Err(ApiError::Unavailable(
+                "identity provider unavailable".into(),
+            ));
         }
         let body: serde_json::Value = res
             .json()
@@ -56,7 +58,9 @@ impl<'a> AdminClient<'a> {
         body.get("access_token")
             .and_then(|v| v.as_str())
             .map(str::to_string)
-            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("admin token response had no access_token")))
+            .ok_or_else(|| {
+                ApiError::Internal(anyhow::anyhow!("admin token response had no access_token"))
+            })
     }
 
     /// Create a realm user with a temporary password.
@@ -102,11 +106,15 @@ impl<'a> AdminClient<'a> {
             .map_err(|e| ApiError::upstream("identity provider", e))?;
 
         if res.status() == reqwest::StatusCode::CONFLICT {
-            return Err(ApiError::Conflict("username or email already exists".into()));
+            return Err(ApiError::Conflict(
+                "username or email already exists".into(),
+            ));
         }
         if !res.status().is_success() {
             tracing::error!(status = %res.status(), "keycloak user creation failed");
-            return Err(ApiError::Unavailable("identity provider unavailable".into()));
+            return Err(ApiError::Unavailable(
+                "identity provider unavailable".into(),
+            ));
         }
 
         // Keycloak returns the new id only in the Location header.
@@ -116,16 +124,27 @@ impl<'a> AdminClient<'a> {
             .and_then(|v| v.to_str().ok())
             .and_then(|loc| loc.rsplit('/').next())
             .map(str::to_string)
-            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("keycloak did not return a user id")))?;
+            .ok_or_else(|| {
+                ApiError::Internal(anyhow::anyhow!("keycloak did not return a user id"))
+            })?;
 
         if !realm_roles.is_empty() {
-            self.assign_realm_roles(&token, &subject, realm_roles).await?;
+            self.assign_realm_roles(&token, &subject, realm_roles)
+                .await?;
         }
 
-        Ok(ProvisionedUser { subject, temporary_password: password })
+        Ok(ProvisionedUser {
+            subject,
+            temporary_password: password,
+        })
     }
 
-    async fn assign_realm_roles(&self, token: &str, subject: &str, roles: &[String]) -> ApiResult<()> {
+    async fn assign_realm_roles(
+        &self,
+        token: &str,
+        subject: &str,
+        roles: &[String],
+    ) -> ApiResult<()> {
         let mut payload = Vec::new();
         for role in roles {
             let url = format!(
@@ -162,7 +181,9 @@ impl<'a> AdminClient<'a> {
             .map_err(|e| ApiError::upstream("identity provider", e))?;
         if !res.status().is_success() {
             tracing::error!(status = %res.status(), "realm role assignment failed");
-            return Err(ApiError::Unavailable("identity provider unavailable".into()));
+            return Err(ApiError::Unavailable(
+                "identity provider unavailable".into(),
+            ));
         }
         Ok(())
     }
@@ -212,7 +233,9 @@ impl<'a> AdminClient<'a> {
                 .map_err(|e| ApiError::upstream("identity provider", e))?;
             if !res.status().is_success() {
                 tracing::error!(status = %res.status(), "realm role removal failed");
-                return Err(ApiError::Unavailable("identity provider unavailable".into()));
+                return Err(ApiError::Unavailable(
+                    "identity provider unavailable".into(),
+                ));
             }
         }
         if !roles.is_empty() {
@@ -224,7 +247,7 @@ impl<'a> AdminClient<'a> {
 
 /// Realm roles this API understands and therefore manages.
 #[allow(dead_code)]
-pub const MANAGED_ROLES: [&str; 4] = ["admin", "supervisor", "lead", "driver"];
+pub const MANAGED_ROLES: [&str; 5] = ["super-admin", "admin", "supervisor", "lead", "driver"];
 
 /// One-time password from the OS CSPRNG (uuid v4 is CSPRNG-backed).
 fn temporary_password() -> String {
@@ -248,7 +271,10 @@ mod tests {
     #[test]
     fn names_split_on_the_first_space() {
         assert_eq!(split_name("Adi Pratama"), ("Adi", "Pratama"));
-        assert_eq!(split_name("  Nadia  Putri Wibowo "), ("Nadia", "Putri Wibowo"));
+        assert_eq!(
+            split_name("  Nadia  Putri Wibowo "),
+            ("Nadia", "Putri Wibowo")
+        );
         assert_eq!(split_name("Sari"), ("Sari", ""));
     }
 

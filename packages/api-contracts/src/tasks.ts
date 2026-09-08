@@ -27,6 +27,13 @@ export const DeviceEventSchema = z.object({
   expectedTaskRevision: RevisionSchema,
   action: StopActionSchema,
   time: DeviceTimeSchema,
+  // `.nullish()`, not `.nullable()`: nullable still requires the key to be
+  // present, so every event from a device that predates this field — i.e. every
+  // app already in the field — would fail `.strict()` and take its whole batch
+  // down with it. A field added to a contract that shipped devices already
+  // speak has to tolerate absence, not just null.
+  location: CoordinateSchema.nullish(),
+  accuracyMeters: z.number().finite().nonnegative().nullish(),
   observationId: IdSchema.nullable(),
   reason: z.string().min(1).max(1000).nullable()
 }).strict().superRefine((event, context) => {
