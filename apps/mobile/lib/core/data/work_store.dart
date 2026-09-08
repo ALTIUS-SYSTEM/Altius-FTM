@@ -56,7 +56,10 @@ Uri parseServerUrl(String raw) {
     throw ArgumentError('invalidServer');
   }
   if (uri.scheme == 'https') return uri;
-  if (uri.scheme == 'http' && _isLoopbackHost(uri.host)) return uri;
+  // Debug only. In a release build on a phone, `localhost` is the phone, so a
+  // malicious app on the same device could stand up a server and impersonate
+  // the API. Development reaches the dev server via `adb reverse`.
+  if (kDebugMode && uri.scheme == 'http' && _isLoopbackHost(uri.host)) return uri;
   throw ArgumentError('invalidServer');
 }
 
