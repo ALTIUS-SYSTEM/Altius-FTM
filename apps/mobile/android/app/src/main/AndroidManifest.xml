@@ -47,6 +47,7 @@
             android:exported="true"
             android:excludeFromRecents="true"
             android:noHistory="true"
+            android:theme="@style/Theme.AppCompat.Translucent.NoTitleBar"
             tools:node="replace">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>

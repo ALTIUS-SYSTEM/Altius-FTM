@@ -4,4 +4,7 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Debug only: allow cleartext http to loopback (adb reverse → local
+         Keycloak :8081 and API :8080). Release manifest stays secure. -->
+    <application android:usesCleartextTraffic="true"/>
 </manifest>

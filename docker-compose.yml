@@ -30,6 +30,10 @@ services:
       # forwarded headers and keep working over plain http for local dev.
       KC_PROXY_HEADERS: ${KC_PROXY_HEADERS:-xforwarded}
       KC_HTTP_ENABLED: "true"
+      # Compress theme assets: the login page pulls ~1.9MB of PatternFly CSS
+      # with Cache-Control: no-store, which is painful over adb reverse / USB
+      # on every login. Gzip cuts it to ~200KB.
+      QUARKUS_HTTP_ENABLE_COMPRESSION: "true"
     volumes:
       - ./deploy/keycloak:/opt/keycloak/data/import:ro
     depends_on:
