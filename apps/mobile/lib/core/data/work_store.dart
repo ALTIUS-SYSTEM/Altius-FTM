@@ -99,17 +99,27 @@ class DailyReport {
     : day = row.read<String>('day'),
       total = row.read<int>('total'),
       completed = row.read<int>('completed'),
-      visited = row.read<int>('visited');
+      visited = row.read<int>('visited'),
+      driverName = row.read<String?>('driver_name') ?? '',
+      vehicleNumber = row.read<String?>('vehicle_number') ?? '',
+      odometerStart = row.read<int?>('odometer_start') ?? 0,
+      odometerEnd = row.read<int?>('odometer_end') ?? 0,
+      notes = row.read<String?>('notes') ?? '';
   final String day;
   final int total;
   final int completed;
   final int visited;
+  final String driverName;
+  final String vehicleNumber;
+  final int odometerStart;
+  final int odometerEnd;
+  final String notes;
 }
 
 class _Database extends GeneratedDatabase {
   _Database(super.executor);
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
   @override
   Iterable<TableInfo<Table, Object?>> get allTables => const [];
   @override
@@ -136,13 +146,20 @@ class _Database extends GeneratedDatabase {
     await customStatement('ALTER TABLE tasks ADD COLUMN lat REAL');
     await customStatement('ALTER TABLE tasks ADD COLUMN lng REAL');
   }
+  Future<void> _upgrade5() async {
+    await customStatement('ALTER TABLE reports ADD COLUMN driver_name TEXT NOT NULL DEFAULT ""');
+    await customStatement('ALTER TABLE reports ADD COLUMN vehicle_number TEXT NOT NULL DEFAULT ""');
+    await customStatement('ALTER TABLE reports ADD COLUMN odometer_start INTEGER NOT NULL DEFAULT 0');
+    await customStatement('ALTER TABLE reports ADD COLUMN odometer_end INTEGER NOT NULL DEFAULT 0');
+    await customStatement('ALTER TABLE reports ADD COLUMN notes TEXT NOT NULL DEFAULT ""');
+  }
   @override
   MigrationStrategy get migration => MigrationStrategy(onCreate: (m) async {
     await customStatement('CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, address TEXT NOT NULL, stage INTEGER NOT NULL DEFAULT 0 CHECK(stage BETWEEN 0 AND 3), eta INTEGER NOT NULL)');
     await customStatement('CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
     await customStatement("CREATE TABLE events (id TEXT PRIMARY KEY, entity TEXT NOT NULL, kind TEXT NOT NULL, utc TEXT NOT NULL, offset_minutes INTEGER NOT NULL, day TEXT NOT NULL, delivery TEXT NOT NULL DEFAULT 'pending', payload TEXT NOT NULL)");
     await customStatement('CREATE TABLE costs (id TEXT PRIMARY KEY, category TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount > 0), note TEXT NOT NULL, day TEXT NOT NULL)');
-    await customStatement('CREATE TABLE reports (day TEXT PRIMARY KEY, total INTEGER NOT NULL, completed INTEGER NOT NULL, visited INTEGER NOT NULL)');
+    await customStatement('CREATE TABLE reports (day TEXT PRIMARY KEY, total INTEGER NOT NULL, completed INTEGER NOT NULL, visited INTEGER NOT NULL, driver_name TEXT NOT NULL DEFAULT "", vehicle_number TEXT NOT NULL DEFAULT "", odometer_start INTEGER NOT NULL DEFAULT 0, odometer_end INTEGER NOT NULL DEFAULT 0, notes TEXT NOT NULL DEFAULT "")');
     await _upgrade();
     await _upgrade3();
     await _upgrade4();
@@ -150,6 +167,7 @@ class _Database extends GeneratedDatabase {
     if (from < 2) { await _upgrade(); }
     if (from < 3) { await _upgrade3(); }
     if (from < 4) { await _upgrade4(); }
+    if (from < 5) { await _upgrade5(); }
   });
 }
 
@@ -419,16 +437,107 @@ class WorkStore {
     await _pref('draft:cost', '');
   });
 
-  Future<void> submitReport() => _write(() async {
+  Future<void> submitReport({
+    String driverName = '',
+    String vehicleNumber = '',
+    int odometerStart = 0,
+    int odometerEnd = 0,
+    String notes = '',
+  }) => _write(() async {
     await _ensureDraft();
     if (await tripActive()) { throw StateError('endTripFirst'); }
+    // The report row is immutable once written, and the odometer delta is what
+    // fleet distance and fuel reconciliation are billed on — so reject nonsense
+    // here rather than storing it forever.
+    if (odometerStart < 0 || odometerEnd < 0) { throw StateError('odometerNegative'); }
+    if (odometerEnd < odometerStart) { throw StateError('odometerBackwards'); }
+    if (odometerEnd - odometerStart > maxDailyKm) { throw StateError('odometerImplausible'); }
     final dailyEvents = (await events()).where((e) => e.day == today).toList();
     final completed = dailyEvents.where((e) => e.kind == 'done').map((e) => e.entity).toSet().length;
     final visited = dailyEvents.where((e) => e.kind == 'arrived').map((e) => e.entity).toSet().length;
     final total = (await costs()).where((e) => e.day == today).fold(0, (sum, e) => sum + e.amount);
-    await _db.customStatement('INSERT INTO reports VALUES (?,?,?,?)', [today, total, completed, visited]);
-    await _event(today, 'reportSubmitted', payload: {'total': total, 'currency': 'IDR', 'completed': completed, 'visited': visited, 'eventIds': dailyEvents.map((e) => e.id).toList(), 'routeSource': 'demo-graph', 'gpsDistanceMeters': null});
+    await _db.customStatement(
+      'INSERT INTO reports VALUES (?,?,?,?,?,?,?,?,?)',
+      [today, total, completed, visited, driverName.trim(), vehicleNumber.trim(), odometerStart, odometerEnd, notes.trim()],
+    );
+    await _event(
+      today,
+      'reportSubmitted',
+      payload: {
+        'total': total,
+        'currency': 'IDR',
+        'completed': completed,
+        'visited': visited,
+        'driverName': driverName.trim(),
+        'vehicleNumber': vehicleNumber.trim(),
+        'odometerStart': odometerStart,
+        'odometerEnd': odometerEnd,
+        'notes': notes.trim(),
+        'eventIds': dailyEvents.map((e) => e.id).toList(),
+        'odometerKm': odometerEnd - odometerStart,
+        'routeSource': 'directions',
+        'gpsDistanceMeters': null,
+      },
+    );
   });
+
+  /// A day's driving above this is a typo, not a shift.
+  static const maxDailyKm = 2000;
+
+  /// Plain-text daily report for pasting into WhatsApp.
+  ///
+  /// The driver's own copy of the record: the operational need Phase 6 would
+  /// otherwise meet with an SMS/WhatsApp gateway, a vendor account and a
+  /// delivery-failure path. A clipboard button costs none of that.
+  Future<String> reportText(String day) async {
+    final r = (await reports()).where((e) => e.day == day).firstOrNull;
+    final dayCosts = (await costs()).where((c) => c.day == day).toList();
+    final org = await preference('organization');
+    final hub = await preference('hub');
+    final lines = <String>[
+      'LAPORAN HARIAN SOPIR',
+      '$org · $hub',
+      'Tanggal: $day',
+      if (r != null && r.driverName.isNotEmpty) 'Sopir: ${r.driverName}',
+      if (r != null && r.vehicleNumber.isNotEmpty) 'Kendaraan: ${r.vehicleNumber}',
+      '',
+      'Kunjungan: ${r?.visited ?? 0}',
+      'Selesai: ${r?.completed ?? 0}',
+    ];
+    if (r != null && r.odometerEnd > r.odometerStart) {
+      lines.add('Odometer: ${r.odometerStart} → ${r.odometerEnd} (${r.odometerEnd - r.odometerStart} km)');
+    }
+    if (dayCosts.isNotEmpty) {
+      lines..add('')..add('Biaya operasional:');
+      for (final c in dayCosts) {
+        lines.add('- ${c.category}: IDR ${c.amount}${c.note.isEmpty ? '' : ' (${c.note})'}');
+      }
+    }
+    lines..add('')..add('Total: IDR ${r?.total ?? dayCosts.fold<int>(0, (a, c) => a + c.amount)}');
+    if (r != null && r.notes.isNotEmpty) lines..add('')..add('Catatan: ${r.notes}');
+    return lines.join('\n');
+  }
+
+  /// Same record as JSON, for pasting into a spreadsheet or ticket.
+  Future<String> reportJson(String day) async {
+    final r = (await reports()).where((e) => e.day == day).firstOrNull;
+    final dayCosts = (await costs()).where((c) => c.day == day).toList();
+    return const JsonEncoder.withIndent('  ').convert({
+      'day': day,
+      'organization': await preference('organization'),
+      'hub': await preference('hub'),
+      'driverName': r?.driverName ?? '',
+      'vehicleNumber': r?.vehicleNumber ?? '',
+      'odometerStart': r?.odometerStart ?? 0,
+      'odometerEnd': r?.odometerEnd ?? 0,
+      'visited': r?.visited ?? 0,
+      'completed': r?.completed ?? 0,
+      'currency': 'IDR',
+      'total': r?.total ?? 0,
+      'notes': r?.notes ?? '',
+      'costs': [for (final c in dayCosts) {'category': c.category, 'amount': c.amount, 'note': c.note}],
+    });
+  }
 
   Future<void> retrySync({required bool offline}) => _write(() async {
     await _pref('lastSyncAttempt', _now().toUtc().toIso8601String());

@@ -1,5 +1,5 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -397,6 +397,22 @@ class _ReportTabState extends State<ReportTab> {
   String _category = 'fuel';
   final _amount = TextEditingController();
   final _note = TextEditingController();
+  final _driverName = TextEditingController();
+  final _vehicleNumber = TextEditingController();
+  final _odometerStart = TextEditingController();
+  final _odometerEnd = TextEditingController();
+  final _reportNotes = TextEditingController();
+  @override
+  void dispose() {
+    _amount.dispose();
+    _note.dispose();
+    _driverName.dispose();
+    _vehicleNumber.dispose();
+    _odometerStart.dispose();
+    _odometerEnd.dispose();
+    _reportNotes.dispose();
+    super.dispose();
+  }
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<WorkCubit, WorkState>(
@@ -444,6 +460,21 @@ class _ReportTabState extends State<ReportTab> {
               label: Text(s('addCost')),
             )),
           ]))),
+          Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(s('lhsDetails'), style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 10),
+            TextField(controller: _driverName, enabled: !locked, decoration: InputDecoration(labelText: s('driverName'))),
+            const SizedBox(height: 10),
+            TextField(controller: _vehicleNumber, enabled: !locked, decoration: InputDecoration(labelText: s('vehicleNumber'))),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: TextField(controller: _odometerStart, keyboardType: TextInputType.number, enabled: !locked, decoration: InputDecoration(labelText: s('odometerStart')))),
+              const SizedBox(width: 12),
+              Expanded(child: TextField(controller: _odometerEnd, keyboardType: TextInputType.number, enabled: !locked, decoration: InputDecoration(labelText: s('odometerEnd')))),
+            ]),
+            const SizedBox(height: 10),
+            TextField(controller: _reportNotes, enabled: !locked, maxLines: 3, decoration: InputDecoration(labelText: s('reportNotes'))),
+          ]))),
           SizedBox(width: double.infinity, child: FilledButton.icon(
             icon: const Icon(Icons.send_rounded),
             onPressed: locked || state.busy || state.activeTrip ? null : () async {
@@ -451,14 +482,45 @@ class _ReportTabState extends State<ReportTab> {
                 title: Text(s('submit')), content: Text(s('confirmReport')),
                 actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: Text(s('cancel'))), FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(s('submit')))],
               ));
-              if (confirm == true) await cubit.act(() => cubit.store.submitReport());
+              if (confirm == true) {
+                await cubit.act(() => cubit.store.submitReport(
+                  driverName: _driverName.text,
+                  vehicleNumber: _vehicleNumber.text,
+                  odometerStart: int.tryParse(_odometerStart.text) ?? 0,
+                  odometerEnd: int.tryParse(_odometerEnd.text) ?? 0,
+                  notes: _reportNotes.text,
+                ));
+              }
             },
             label: Text(locked ? s('submitted') : s('submit')),
           )),
+          if (locked) Padding(padding: const EdgeInsets.only(top: 12), child: Row(children: [
+            // The driver's own copy of the record. A clipboard button meets the
+            // "send the LHS to a supervisor" need without a messaging vendor.
+            Expanded(child: OutlinedButton.icon(
+              icon: const Icon(Icons.copy_rounded, size: 18),
+              onPressed: () async {
+                final text = await cubit.store.reportText(today);
+                await Clipboard.setData(ClipboardData(text: text));
+                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s('copied'))));
+              },
+              label: Text(s('copyText')),
+            )),
+            const SizedBox(width: 10),
+            Expanded(child: OutlinedButton.icon(
+              icon: const Icon(Icons.data_object_rounded, size: 18),
+              onPressed: () async {
+                final json = await cubit.store.reportJson(today);
+                await Clipboard.setData(ClipboardData(text: json));
+                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s('copied'))));
+              },
+              label: Text(s('copyJson')),
+            )),
+          ])),
           const SizedBox(height: 16),
           ...state.reports.map((r) => Card(child: ListTile(leading: const Icon(Icons.lock_rounded, color: AppTheme.teal),
             title: Text('${r.day} · ${s('submitted')}'),
-            subtitle: Text('${r.visited} ${s('visited')} · ${r.completed} ${s('done')} · IDR ${r.total}')))),
+            subtitle: Text('${r.vehicleNumber} · ${r.odometerStart}-${r.odometerEnd} km · ${r.visited} ${s('visited')} · ${r.completed} ${s('done')} · IDR ${r.total} · ${r.notes}')))),
         ]);
       },
     );
