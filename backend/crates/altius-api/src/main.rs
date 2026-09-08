@@ -1,8 +1,10 @@
+mod admin;
 mod agent;
 mod auth;
 mod config;
 mod error;
 mod maps;
+mod notify;
 mod routes;
 mod store;
 

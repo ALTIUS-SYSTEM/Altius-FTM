@@ -8,6 +8,7 @@ import { downloadText, tasksCsv } from "@/data/adapter";
 import { DEMO_DATE, DRIVERS } from "@/data/model";
 import type { DemoRecord } from "@/data/model";
 import { optimizeRoute, staticMapUrl, type OptimizedRoute } from "@/data/route-api";
+import { ProvisionUser } from "./provision-user";
 import { compareGpsStreams, evaluateCorridor, aggregateDaily } from "@altius/algos";
 
 /* ---------- shared helpers ---------- */
@@ -183,7 +184,16 @@ export function DataExport() {
 }
 
 /* ---------- settings ---------- */
-export function Users() { const [editing, setEditing] = useState(false); return <><RecordTable kind="user" headings={["User", "Contact", "Role", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No users" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="user" onClose={() => setEditing(false)}/>}</>; }
+export function Users() {
+  const [editing, setEditing] = useState(false);
+  const [provisioning, setProvisioning] = useState(false);
+  return <>
+    <RecordTable kind="user" headings={["User", "Contact", "Role", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No users" onCreate={() => setEditing(true)}/>
+    <div className="row-actions"><button className="primary" onClick={() => setProvisioning(true)}>Create real account</button></div>
+    {provisioning && <ProvisionUser onClose={() => setProvisioning(false)}/>}
+    {editing && <RecordEditor kind="user" onClose={() => setEditing(false)}/>}
+  </>;
+}
 export function Teams() { const [editing, setEditing] = useState(false); return <><RecordTable kind="team" headings={["Team", "Shift", "Members", "Status"]} render={r => act(r, <button onClick={() => setEditing(true)}>Edit</button>)} empty="No teams" onCreate={() => setEditing(true)}/>{editing && <RecordEditor kind="team" onClose={() => setEditing(false)}/>}</>; }
 export function Permissions() {
   const { state, update } = useDemo();

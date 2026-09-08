@@ -39,7 +39,15 @@ export function DemoProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!adapter) { setError(configError); setReady(true); return; }
     let active = true;
-    adapter.load().then(data => { if (active) { setState(data); setReady(true); } }).catch((err) => { if (active) { setError(err instanceof Error ? err.message : "The workspace could not load from the API."); setReady(true); } });
+    adapter.load().then(data => { if (active) { setState(data); setReady(true); } }).catch((err: unknown) => {
+      if (!active) return;
+      // Having no token before sign-in is the expected pre-login state, not a
+      // failure — surfacing it as an error banner on the sign-in screen tells
+      // the user something is broken when nothing is.
+      const message = err instanceof Error ? err.message : "";
+      setError(message === "not authenticated" ? "" : (message || "The workspace could not load from the API."));
+      setReady(true);
+    });
     return () => { active = false; };
   }, [adapter, configError]);
   useEffect(() => { if (notice) { const timer = setTimeout(() => setNotice(""), 5000); return () => clearTimeout(timer); } }, [notice]);

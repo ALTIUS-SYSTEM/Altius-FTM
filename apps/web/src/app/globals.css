@@ -207,3 +207,37 @@ dialog.modal::backdrop { background: rgba(15,30,38,.45); }
 @media (prefers-reduced-motion: reduce) { * { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
 
 .route-map { width: 100%; height: auto; display: block; border-radius: 10px; }
+
+/* --- Auth 3 layout: centered card floating over a full-bleed brand scene,
+   with the brand block beside it on wide screens. Rebuilt on this app's own
+   tokens; the upstream block is Tailwind + motion, neither of which this app
+   carries, and its Google/Apple/GitHub buttons have no counterpart here. --- */
+.auth-scene { position: relative; min-height: 100vh; display: grid; place-items: center; padding: 24px; overflow: hidden; }
+.auth-scene::before {
+  content: ""; position: absolute; inset: 0;
+  background:
+    radial-gradient(120% 90% at 15% 10%, #0a87a8 0%, transparent 55%),
+    radial-gradient(100% 80% at 85% 90%, var(--cyan-dark) 0%, transparent 60%),
+    linear-gradient(160deg, #01303c 0%, var(--teal) 70%, #0a87a8 100%);
+}
+.auth-scene::after { content: ""; position: absolute; inset: 0; background: rgba(0, 20, 28, .28); }
+.auth-shell { position: relative; z-index: 1; width: 100%; max-width: 1180px; display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 56px; align-items: center; justify-content: center; }
+.auth-card {
+  background: var(--card); border-radius: 20px; padding: 34px;
+  box-shadow: 0 30px 70px -20px rgba(0, 24, 34, .55);
+  animation: auth-rise .5s cubic-bezier(.22, 1, .36, 1) both;
+}
+.auth-aside .brand { color: #fff; }
+.auth-aside .brand-mark { filter: brightness(0) invert(1); }
+.auth-aside { color: #eaf7fb; animation: auth-rise .5s cubic-bezier(.22, 1, .36, 1) .12s both; }
+.auth-aside h2 { font-size: 38px; line-height: 1.1; letter-spacing: -.03em; margin: 18px 0 12px; }
+.auth-aside h2 em { color: var(--cyan); font-style: normal; }
+.auth-aside p { color: #b8d8e2; max-width: 32ch; font-size: 15px; }
+.auth-aside .login-route { margin-top: 28px; }
+.auth-aside > small { display: block; margin-top: 28px; color: #7fb4c4; }
+@keyframes auth-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .auth-card, .auth-aside { animation: none; } }
+@media (max-width: 900px) {
+  .auth-shell { grid-template-columns: 1fr; gap: 28px; max-width: 460px; }
+  .auth-aside { display: none; }
+}

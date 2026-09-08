@@ -469,6 +469,321 @@ impl Store {
         Ok(())
     }
 
+    /// Bind a freshly created Keycloak subject to an org and hub.
+    ///
+    /// `org` and `hub` come from the calling admin's own resolved scope, never
+    /// from the request body — otherwise provisioning becomes a way to plant a
+    /// member in another tenant. The hub must be allocated to that org.
+    pub async fn provision_user(
+        &self,
+        org: &str,
+        hub: &str,
+        subject: &str,
+        display_name: &str,
+    ) -> anyhow::Result<()> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for provisioning")?;
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub, has hub-id "{hub}";
+                allocation (org: $o, hub: $h);
+            insert
+                $u isa user, has user-sub "{sub}", has display-name "{name}";
+                membership (member: $u, org: $o);
+                hub-assignment (member: $u, hub: $h);"#,
+            org = Self::esc(org),
+            hub = Self::esc(hub),
+            sub = Self::esc(subject),
+            name = Self::esc(display_name),
+        );
+        tx.query(&q).await.context("provision user")?;
+        tx.commit().await.context("commit provisioning")?;
+        Ok(())
+    }
+
+    /// Run a write query and report whether it matched anything.
+    ///
+    /// TypeQL makes an `insert` whose `match` is empty a silent no-op, so every
+    /// scoped mutation must check rather than assume — otherwise a caller
+    /// targeting another tenant's row gets HTTP 200 and no change.
+    async fn write_scoped(&self, query: &str, context_msg: &'static str) -> anyhow::Result<bool> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx")?;
+        let answer = tx.query(query).await.context(context_msg)?;
+        let touched = match answer {
+            QueryAnswer::ConceptRowStream(_, mut rows) => rows.next().await.is_some(),
+            QueryAnswer::ConceptDocumentStream(_, mut docs) => docs.next().await.is_some(),
+            QueryAnswer::Ok(_) => true,
+        };
+        if touched {
+            tx.commit().await.context("commit")?;
+        } else {
+            tx.rollback().await.ok();
+        }
+        Ok(touched)
+    }
+
+    async fn exists(&self, query: &str) -> anyhow::Result<bool> {
+        Ok(!self.fetch_all(query).await?.is_empty())
+    }
+
+    // ---------- hubs ----------
+
+    pub async fn create_hub(
+        &self,
+        org: &str,
+        hub_id: &str,
+        name: &str,
+        lat: f64,
+        lng: f64,
+    ) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+            insert
+                $h isa hub, has hub-id "{hub}", has display-name "{name}",
+                    has latitude {lat}, has longitude {lng};
+                allocation (org: $o, hub: $h);"#,
+            org = Self::esc(org),
+            hub = Self::esc(hub_id),
+            name = Self::esc(name),
+        );
+        self.write_scoped(&q, "create hub").await
+    }
+
+    pub async fn update_hub(
+        &self,
+        org: &str,
+        hub_id: &str,
+        name: &str,
+        lat: f64,
+        lng: f64,
+    ) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub, has hub-id "{hub}";
+                allocation (org: $o, hub: $h);
+                $h has display-name $old-name, has latitude $old-lat, has longitude $old-lng;
+            delete
+                has $old-name of $h;
+                has $old-lat of $h;
+                has $old-lng of $h;
+            insert
+                $h has display-name "{name}", has latitude {lat}, has longitude {lng};"#,
+            org = Self::esc(org),
+            hub = Self::esc(hub_id),
+            name = Self::esc(name),
+        );
+        self.write_scoped(&q, "update hub").await
+    }
+
+    /// Whether anything still references this hub. Deleting a hub with tasks or
+    /// teams would orphan them, so the route refuses instead of cascading.
+    pub async fn hub_in_use(&self, org: &str, hub_id: &str) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub, has hub-id "{hub}";
+                allocation (org: $o, hub: $h);
+                {{ located (task: $x, hub: $h); }} or {{ stationed (team: $x, hub: $h); }};
+            fetch {{ "used": true }};"#,
+            org = Self::esc(org),
+            hub = Self::esc(hub_id),
+        );
+        self.exists(&q).await
+    }
+
+    pub async fn delete_hub(&self, org: &str, hub_id: &str) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub, has hub-id "{hub}";
+                $a isa allocation (org: $o, hub: $h);
+            delete
+                $a;
+                $h;"#,
+            org = Self::esc(org),
+            hub = Self::esc(hub_id),
+        );
+        self.write_scoped(&q, "delete hub").await
+    }
+
+    // ---------- organization ----------
+
+    /// Rename only. Creating and deleting organizations is tenant lifecycle,
+    /// not an in-app admin form — a delete would cascade every hub, task and
+    /// report the tenant owns.
+    pub async fn update_organization(&self, org: &str, name: &str) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}", has display-name $old;
+            delete has $old of $o;
+            insert $o has display-name "{name}";"#,
+            org = Self::esc(org),
+            name = Self::esc(name),
+        );
+        self.write_scoped(&q, "update organization").await
+    }
+
+    // ---------- teams ----------
+
+    pub async fn teams_for_org(&self, org: &str) -> anyhow::Result<Vec<Value>> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                allocation (org: $o, hub: $h);
+                stationed (team: $t, hub: $h);
+                $h has hub-id $hid;
+            fetch {{
+                "team": {{ $t.* }},
+                "hub": $hid,
+                "members": [
+                    match crewing (team: $t, member: $u);
+                    fetch {{ "user": {{ $u.* }} }};
+                ]
+            }};"#,
+            org = Self::esc(org)
+        );
+        self.fetch_all(&q).await
+    }
+
+    pub async fn create_team(
+        &self,
+        org: &str,
+        hub_id: &str,
+        team_id: &str,
+        name: &str,
+        shift: &str,
+    ) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub, has hub-id "{hub}";
+                allocation (org: $o, hub: $h);
+            insert
+                $t isa team, has team-id "{tid}", has display-name "{name}", has shift "{shift}";
+                stationed (team: $t, hub: $h);"#,
+            org = Self::esc(org),
+            hub = Self::esc(hub_id),
+            tid = Self::esc(team_id),
+            name = Self::esc(name),
+            shift = Self::esc(shift),
+        );
+        self.write_scoped(&q, "create team").await
+    }
+
+    pub async fn update_team(
+        &self,
+        org: &str,
+        team_id: &str,
+        name: &str,
+        shift: &str,
+    ) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                allocation (org: $o, hub: $h);
+                stationed (team: $t, hub: $h);
+                $t has team-id "{tid}", has display-name $old-name, has shift $old-shift;
+            delete
+                has $old-name of $t;
+                has $old-shift of $t;
+            insert
+                $t has display-name "{name}", has shift "{shift}";"#,
+            org = Self::esc(org),
+            tid = Self::esc(team_id),
+            name = Self::esc(name),
+            shift = Self::esc(shift),
+        );
+        self.write_scoped(&q, "update team").await
+    }
+
+    pub async fn delete_team(&self, org: &str, team_id: &str) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                allocation (org: $o, hub: $h);
+                $st isa stationed (team: $t, hub: $h);
+                $t has team-id "{tid}";
+            delete
+                $st;
+                $t;"#,
+            org = Self::esc(org),
+            tid = Self::esc(team_id),
+        );
+        self.write_scoped(&q, "delete team").await
+    }
+
+    /// Add a driver to a team. Both must already sit inside the caller's org,
+    /// so a subject from another tenant simply fails to match.
+    pub async fn add_team_member(
+        &self,
+        org: &str,
+        team_id: &str,
+        subject: &str,
+    ) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                allocation (org: $o, hub: $h);
+                stationed (team: $t, hub: $h);
+                $t has team-id "{tid}";
+                $u isa user, has user-sub "{sub}";
+                membership (member: $u, org: $o);
+            insert
+                crewing (team: $t, member: $u);"#,
+            org = Self::esc(org),
+            tid = Self::esc(team_id),
+            sub = Self::esc(subject),
+        );
+        self.write_scoped(&q, "add team member").await
+    }
+
+    pub async fn remove_team_member(
+        &self,
+        org: &str,
+        team_id: &str,
+        subject: &str,
+    ) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                allocation (org: $o, hub: $h);
+                stationed (team: $t, hub: $h);
+                $t has team-id "{tid}";
+                $u isa user, has user-sub "{sub}";
+                $c isa crewing (team: $t, member: $u);
+            delete $c;"#,
+            org = Self::esc(org),
+            tid = Self::esc(team_id),
+            sub = Self::esc(subject),
+        );
+        self.write_scoped(&q, "remove team member").await
+    }
+
+    /// Confirm a subject belongs to the caller's organization before any
+    /// operation that names them (role changes, team membership).
+    pub async fn user_in_org(&self, org: &str, subject: &str) -> anyhow::Result<bool> {
+        let q = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $u isa user, has user-sub "{sub}";
+                membership (member: $u, org: $o);
+            fetch {{ "member": true }};"#,
+            org = Self::esc(org),
+            sub = Self::esc(subject),
+        );
+        self.exists(&q).await
+    }
+
     /// Resolve the organization and first hub bound to a principal subject.
     pub async fn organization_and_hub_of(
         &self,
@@ -490,6 +805,71 @@ impl Store {
             let hub = d.get("hub").and_then(|v| v.as_str()).map(str::to_string)?;
             Some((org, hub))
         }))
+    }
+
+    /// Upsert a push token for a user's device. Existing token for the same
+    /// device id is replaced; a user can have multiple devices.
+    pub async fn register_push_token(
+        &self,
+        subject: &str,
+        device_id: &str,
+        token: &str,
+    ) -> anyhow::Result<()> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for push token")?;
+        let q = format!(
+            r#"match
+                $u isa user, has user-sub "{sub}";
+            insert
+                $d isa device, has device-id "{did}", has fcm-token "{token}";
+                owns (owner: $u, asset: $d);"#,
+            sub = Self::esc(subject),
+            did = Self::esc(device_id),
+            token = Self::esc(token),
+        );
+        // TypeDB will reject duplicate device-id. Delete the old token first
+        // so the new one can take its place. Fetch and delete is not supported
+        // in a single write query, so we attempt the insert; on conflict we
+        // update in a second query.
+        if tx.query(&q).await.is_err() {
+            let update = format!(
+                r#"match
+                    $d isa device, has device-id "{did}";
+                    delete
+                        has $d fcm-token;
+                    insert
+                        $d has fcm-token "{token}";"#,
+                did = Self::esc(device_id),
+                token = Self::esc(token),
+            );
+            tx.query(&update).await.context("update push token")?;
+        }
+        tx.commit().await.context("commit push token")?;
+        Ok(())
+    }
+
+    /// FCM tokens for every device a user has registered.
+    pub async fn push_tokens_for_user(&self, subject: &str) -> anyhow::Result<Vec<String>> {
+        let q = format!(
+            r#"match
+                $u isa user, has user-sub "{sub}";
+                owns (owner: $u, asset: $d);
+                $d has fcm-token $t;
+            select $t;"#,
+            sub = Self::esc(subject)
+        );
+        let rows = self.fetch_all(&q).await?;
+        Ok(rows
+            .iter()
+            .filter_map(|d| {
+                d.get("t")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .collect())
     }
 
     /// Users belonging to an organization.

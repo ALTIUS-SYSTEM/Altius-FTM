@@ -10,6 +10,9 @@ use crate::AppState;
 
 fn test_state() -> Arc<AppState> {
     let config = Config {
+        keycloak_admin: None,
+        notify: None,
+        fcm_api_key: None,
         keycloak: KeycloakConfig {
             issuer: "https://sso.example.com/realms/test".into(),
             jwks_url_override: None,

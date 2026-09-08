@@ -11,5 +11,9 @@ import { DemoProvider } from "@/components/demo-provider";
 export const metadata: Metadata = { title: "Altius · Field Operations Demo", description: "Altius FTM operations workspace — synthetic demo data only." };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="en"><body><DemoProvider>{children}</DemoProvider></body></html>;
+  // Browser extensions inject attributes into <body> before React hydrates
+  // (ColorZilla's `cz-shortcut-listen`, password managers, dark-mode add-ons),
+  // which the app cannot prevent or predict. suppressHydrationWarning applies
+  // one level deep only, so genuine mismatches inside DemoProvider still warn.
+  return <html lang="en"><body suppressHydrationWarning><DemoProvider>{children}</DemoProvider></body></html>;
 }

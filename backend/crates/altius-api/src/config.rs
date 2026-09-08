@@ -42,6 +42,58 @@ pub struct Config {
     pub default_hub_id: String,
     pub default_hub_name: String,
     pub default_admin_sub: String,
+    /// Service-account client for the Keycloak Admin API (user provisioning).
+    /// Absent = provisioning disabled; the endpoint refuses rather than
+    /// half-creating a user that exists in one system and not the other.
+    pub keycloak_admin: Option<KeycloakAdminConfig>,
+    /// Outbound SMS/WhatsApp gateway. Absent = notify endpoints refuse.
+    pub notify: Option<NotifyConfig>,
+    /// Firebase Cloud Messaging server key for push delivery to mobile.
+    /// Absent = /api/v3/notify/push/send refuses.
+    pub fcm_api_key: Option<String>,
+}
+
+/// Credentials for the Keycloak Admin REST API.
+#[derive(Clone)]
+pub struct KeycloakAdminConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    /// Realm to create users in; defaults to the one parsed from the issuer.
+    pub realm: String,
+    /// Base URL without the `/realms/...` suffix, e.g. `https://sso.example.com`.
+    pub base_url: String,
+}
+
+// Hand-written so a stray `{:?}` on Config can never print the secret.
+impl std::fmt::Debug for KeycloakAdminConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeycloakAdminConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<redacted>")
+            .field("realm", &self.realm)
+            .field("base_url", &self.base_url)
+            .finish()
+    }
+}
+
+/// Generic HTTP messaging gateway (Twilio, Wassenger, or a regional provider).
+#[derive(Clone)]
+pub struct NotifyConfig {
+    pub sms_url: Option<String>,
+    pub whatsapp_url: Option<String>,
+    pub token: String,
+    pub sender: String,
+}
+
+impl std::fmt::Debug for NotifyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotifyConfig")
+            .field("sms_url", &self.sms_url)
+            .field("whatsapp_url", &self.whatsapp_url)
+            .field("token", &"<redacted>")
+            .field("sender", &self.sender)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -101,6 +153,60 @@ impl Config {
                 .unwrap_or_else(|_| "Jakarta".into()),
             default_admin_sub: std::env::var("DEFAULT_ADMIN_SUB")
                 .unwrap_or_else(|_| "admin".into()),
+            keycloak_admin: match (
+                std::env::var("KEYCLOAK_ADMIN_CLIENT_ID").ok(),
+                std::env::var("KEYCLOAK_ADMIN_CLIENT_SECRET").ok(),
+            ) {
+                (Some(id), Some(secret)) if !id.is_empty() && !secret.is_empty() => {
+                    let (base_url, realm) = split_issuer(&issuer);
+                    Some(KeycloakAdminConfig {
+                        client_id: id,
+                        client_secret: secret,
+                        realm: std::env::var("KEYCLOAK_ADMIN_REALM").unwrap_or(realm),
+                        base_url: std::env::var("KEYCLOAK_ADMIN_BASE_URL").unwrap_or(base_url),
+                    })
+                }
+                _ => None,
+            },
+            notify: std::env::var("NOTIFY_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty())
+                .map(|token| NotifyConfig {
+                    sms_url: std::env::var("NOTIFY_SMS_URL").ok().filter(|u| !u.is_empty()),
+                    whatsapp_url: std::env::var("NOTIFY_WHATSAPP_URL").ok().filter(|u| !u.is_empty()),
+                    token,
+                    sender: std::env::var("NOTIFY_SENDER").unwrap_or_default(),
+                }),
+            fcm_api_key: std::env::var("FCM_API_KEY").ok().filter(|s| !s.is_empty()),
         })
+    }
+}
+
+/// Split `https://host/realms/altius` into (`https://host`, `altius`).
+///
+/// Falls back to the whole issuer and an empty realm when the shape is
+/// unexpected, so a misconfigured issuer surfaces as a failed admin call
+/// rather than a silently wrong URL.
+fn split_issuer(issuer: &str) -> (String, String) {
+    match issuer.rsplit_once("/realms/") {
+        Some((base, realm)) => (base.to_string(), realm.trim_end_matches('/').to_string()),
+        None => (issuer.trim_end_matches('/').to_string(), String::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_issuer;
+
+    #[test]
+    fn issuer_splits_into_base_and_realm() {
+        assert_eq!(
+            split_issuer("https://sso.example.com/realms/altius"),
+            ("https://sso.example.com".into(), "altius".into())
+        );
+        // Trailing slash must not leak into the realm name.
+        assert_eq!(split_issuer("https://sso.example.com/realms/altius/").1, "altius");
+        // Unexpected shape: no realm rather than a guessed one.
+        assert_eq!(split_issuer("https://sso.example.com").1, "");
     }
 }

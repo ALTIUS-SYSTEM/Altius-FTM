@@ -31,6 +31,10 @@ attribute note          value string;
 attribute report-status value string;
 attribute revision      value integer;
 attribute plate         value string;
+attribute team-id       value string;
+attribute shift         value string;
+attribute fcm-token     value string;
+attribute device-id     value string;
 
 # ---------- entities ----------
 entity organization
@@ -91,7 +95,22 @@ entity vehicle
     owns plate @key,
     owns display-name;
 
+entity device
+    owns device-id @key,
+    owns fcm-token;
+
+# A named group of drivers within one hub — the unit a supervisor rosters.
+entity team
+    owns team-id @key,
+    owns display-name,
+    owns shift;
+
 # ---------- relations ----------
+relation owns
+    relates owner,
+    relates asset;
+entity user plays owns:owner;
+entity device plays owns:asset;
 relation membership
     relates member,
     relates org;
@@ -145,6 +164,20 @@ relation operates
     relates vehicle;
 entity hub     plays operates:hub;
 entity vehicle plays operates:vehicle;
+
+relation crewing
+    relates team,
+    relates member;
+entity team plays crewing:team;
+entity user plays crewing:member;
+
+# A team belongs to exactly one hub, and the hub to one org — so team scope is
+# derivable from the same allocation chain every other query already walks.
+relation stationed
+    relates team,
+    relates hub;
+entity team plays stationed:team;
+entity hub  plays stationed:hub;
 
 relation allocation
     relates org,

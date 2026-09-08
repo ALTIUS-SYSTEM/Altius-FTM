@@ -36,8 +36,16 @@ const leaf = (v: unknown, depth = 0): unknown => {
 const flatten = (obj: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, leaf(v)]));
 
-/** Tasks the server last gave us, so `save` can tell a real edit from a no-op. */
-let lastLoaded = "";
+/**
+ * Tasks the server last gave us, so `save` can tell a real edit from a no-op.
+ *
+ * Seeded with the serialization of an empty list, not `""`: when `load()` fails
+ * — no session yet, API down — this is never assigned, and an empty baseline is
+ * what the state actually holds. An `""` sentinel made the very first `update()`
+ * (the demo sign-in, which touches only `role` and `session`) compare `"[]"`
+ * against `""` and report a task edit that never happened.
+ */
+let lastLoaded = JSON.stringify([]);
 
 const mapStatus = (stage: string): DemoTaskStatus => {
   switch (stage) {
