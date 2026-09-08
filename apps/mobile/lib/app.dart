@@ -121,6 +121,14 @@ class _LoginScreenState extends State<LoginScreen> {
           TextField(controller: _password, obscureText: true, decoration: const InputDecoration(labelText: 'Password')),
           const SizedBox(height: 10),
         ],
+        // Surface login errors inline — the login screen is not wrapped in the
+        // BlocListener that shows SnackBars, so a failed sign-in looked like a
+        // dead button.
+        if (cubit.state.error != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(s(cubit.state.error!), style: const TextStyle(color: Color(0xFFB3261E), fontSize: 13)),
+          ),
         Align(alignment: Alignment.centerLeft, child: TextButton(
           onPressed: () => showDialog<void>(context: context, builder: (_) => AlertDialog(title: Text(s('authHelp')), content: Text(livePrimary ? Strings.fallback['authHelpLiveBody']! : Strings.fallback['authHelpBody']!), actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(s('cancel')))])),
           child: Text(s('authHelp')),
@@ -128,6 +136,7 @@ class _LoginScreenState extends State<LoginScreen> {
         const SizedBox(height: 8),
         FilledButton(
           onPressed: _busy ? null : () async {
+            debugPrint('[login] tap wantsKeycloak=$_wantsKeycloak busy=${cubit.state.busy}');
             setState(() => _busy = true);
             await cubit.act(() async {
               if (_wantsKeycloak) {

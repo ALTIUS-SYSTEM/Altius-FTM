@@ -61,6 +61,7 @@ class Strings {
     'odometerBackwards': ['End odometer is below the start reading', 'Odometer akhir lebih kecil dari awal', 'เลขไมล์สิ้นสุดน้อยกว่าเริ่มต้น', '終了時の距離計が開始時より小さいです', '结束里程小于起始里程', 'Mas mababa ang end odometer kaysa simula', 'Số km cuối nhỏ hơn số km đầu'],
     'odometerNegative': ['Odometer cannot be negative', 'Odometer tidak boleh negatif', 'เลขไมล์ติดลบไม่ได้', '距離計に負の値は使えません', '里程不能为负数', 'Hindi puwedeng negatibo ang odometer', 'Số km không thể âm'],
     'odometerImplausible': ['That odometer range is too large for one day', 'Rentang odometer terlalu besar untuk satu hari', 'ระยะทางมากเกินไปสำหรับหนึ่งวัน', '1日の走行距離としては大きすぎます', '单日里程过大', 'Masyadong malaki ang distansya para sa isang araw', 'Quãng đường quá lớn cho một ngày'],
+    'authHelp': ['Authentication help', 'Bantuan autentikasi', 'ความช่วยเหลือการเข้าสู่ระบบ', '認証ヘルプ', '认证帮助', 'Tulong sa pag-authenticate', 'Trợ giúp xác thực'],
     'pending': ['Pending · not uploaded', 'Menunggu · belum diunggah', 'รอดำเนินการ · ยังไม่อัปโหลด', '保留中・未送信', '待处理 · 尚未上传', 'Nakabinbin · hindi pa na-upload', 'Chờ xử lý · chưa tải lên'],
     'synced': ['Synced', 'Tersinkron', 'ซิงค์แล้ว', '同期済み', '已同步', 'Naka-sync', 'Đã đồng bộ'],
     'rejectedEvent': ['Rejected by server · needs review', 'Ditolak server · perlu ditinjau', 'เซิร์ฟเวอร์ปฏิเสธ · ต้องตรวจสอบ', 'サーバーが拒否・要確認', '服务器拒绝 · 需复核', 'Tinanggihan ng server · kailangan suriin', 'Máy chủ từ chối · cần xem lại'],
