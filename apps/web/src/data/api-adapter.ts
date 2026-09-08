@@ -3,7 +3,7 @@
 import type { DemoAdapter } from "./adapter";
 import { createLocalAdapter } from "./adapter";
 import type { DemoState, DemoTask, DemoTaskStatus } from "./model";
-import { createEmptyState } from "./model";
+import { createEmptyState, demoTaskSchema } from "./model";
 
 /**
  * Live adapter: task data comes from the Altius API; non-task preferences
@@ -19,18 +19,25 @@ interface TaskDoc {
   [key: string]: unknown;
 }
 
-const leaf = (v: unknown): unknown => {
+/** Depth-bounded: a deeply nested single-element array in a response would
+ *  otherwise blow the stack and blank the whole board for every user. */
+const MAX_LEAF_DEPTH = 16;
+const leaf = (v: unknown, depth = 0): unknown => {
+  if (depth >= MAX_LEAF_DEPTH) return v;
   if (v && typeof v === "object" && "value" in v) {
     return (v as { value: unknown }).value;
   }
   if (Array.isArray(v) && v.length === 1) {
-    return leaf(v[0]);
+    return leaf(v[0], depth + 1);
   }
   return v;
 };
 
 const flatten = (obj: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, leaf(v)]));
+
+/** Tasks the server last gave us, so `save` can tell a real edit from a no-op. */
+let lastLoaded = "";
 
 const mapStatus = (stage: string): DemoTaskStatus => {
   switch (stage) {
@@ -108,16 +115,35 @@ export const createApiAdapter = (
   return {
     async load(): Promise<DemoState> {
       const { data } = await request("/api/v3/tasks");
-      const tasks = (Array.isArray(data) ? data : []).map((d) =>
-        toTask(d as TaskDoc),
-      );
+      // The API is another trust boundary: its rows carry text written by
+      // other users of the tenant. `toTask` only String()-coerces, so without
+      // this the model's length and shape bounds hold for locally created
+      // tasks and are silently waived for live ones.
+      const tasks = (Array.isArray(data) ? data : []).flatMap((d) => {
+        const parsed = demoTaskSchema.safeParse(toTask(d as TaskDoc));
+        if (!parsed.success) {
+          console.warn("dropping malformed task from API", parsed.error.issues);
+          return [];
+        }
+        return [parsed.data];
+      });
       const base = createEmptyState();
       const localState = await local.load().catch(() => base);
+      lastLoaded = JSON.stringify(tasks);
       return { ...base, ...localState, tasks };
     },
     save(state) {
       const prefs = { ...createEmptyState(), ...state, tasks: [] };
       local.save(prefs);
+      // There is no write path to the API yet. Returning normally here made
+      // every assignment, arrival and completion vanish on reload while the
+      // UI reported success — a silent integrity failure in the audit trail.
+      // Fail loudly instead, so the provider surfaces it.
+      if (JSON.stringify(state.tasks) !== lastLoaded) {
+        throw new Error(
+          "Task changes are not saved: this build has no write path to the Altius API. Your edit was not persisted.",
+        );
+      }
     },
     reset() {
       return createEmptyState();

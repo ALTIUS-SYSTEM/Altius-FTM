@@ -2,7 +2,14 @@ export interface GeoPoint { lat: number; lng: number }
 export interface WeightedEdge { to: string; weight: number }
 export type DemoGraph = Record<string, readonly WeightedEdge[]>;
 
+/**
+ * Great-circle distance in metres. Returns `Infinity` for any non-finite
+ * input rather than NaN: these distances feed fraud controls, and NaN is
+ * sticky through `Math.max` and false in every comparison, so one unusable
+ * coordinate would silently clear an entire batch.
+ */
 export const haversineMeters = (a: GeoPoint, b: GeoPoint): number => {
+  if (![a?.lat, a?.lng, b?.lat, b?.lng].every(Number.isFinite)) return Infinity;
   const rad = Math.PI / 180;
   const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
@@ -61,13 +68,23 @@ export interface CorridorResult { offRoute: boolean; distanceMeters: number; rea
 
 export function evaluateCorridor(samples: readonly GeoSample[], corridor: readonly GeoPoint[], opts: { radiusMeters: number; consecutiveBreach: number; maxAccuracyMeters: number }): CorridorResult {
   if (corridor.length < 2) return { offRoute: false, distanceMeters: 0, reason: "insufficient-corridor" };
-  let streak = 0, last = 0;
+  let streak = 0, last = 0, evaluated = 0;
   for (const s of samples) {
     if (s.accuracyMeters !== undefined && s.accuracyMeters > opts.maxAccuracyMeters) continue;
-    last = distanceToCorridorMeters(s, corridor);
+    const d = distanceToCorridorMeters(s, corridor);
+    // An unmeasurable sample must not reset the breach streak — otherwise one
+    // position-less reading interleaved between breaches hides the detour.
+    if (!Number.isFinite(d)) continue;
+    evaluated++;
+    last = d;
     streak = last > opts.radiusMeters ? streak + 1 : 0;
     if (streak >= opts.consecutiveBreach) return { offRoute: true, distanceMeters: last, reason: "outside" };
   }
+  // "inside" is an affirmative claim. With nothing measurable — an empty batch,
+  // or every sample self-reporting an accuracy above the limit — we have no
+  // evidence either way, and saying "inside" would let a device opt out of the
+  // check by inflating accuracyMeters.
+  if (evaluated === 0) return { offRoute: false, distanceMeters: 0, reason: "inaccurate" };
   return { offRoute: false, distanceMeters: last, reason: "inside" };
 }
 
@@ -75,13 +92,23 @@ export interface StreamPair { app: readonly GeoSample[]; vehicle: readonly GeoSa
 export interface AnomalyResult { varianceMeters: number; matched: number; flag: "none" | "review" | "insufficient-data" }
 
 export function compareGpsStreams({ app, vehicle }: StreamPair, opts: { maxTimeGapMs: number; thresholdMeters: number }): AnomalyResult {
-  let matched = 0, worst = 0;
+  let matched = 0, worst = 0, unmeasurable = 0;
   for (const a of app) {
     let bestDelta = Infinity, best: GeoSample | null = null;
     for (const v of vehicle) { const d = Math.abs(a.at - v.at); if (d < bestDelta) { bestDelta = d; best = v; } }
-    if (best && bestDelta <= opts.maxTimeGapMs) { matched++; worst = Math.max(worst, haversineMeters(a, best)); }
+    if (best && bestDelta <= opts.maxTimeGapMs) {
+      matched++;
+      const d = haversineMeters(a, best);
+      if (Number.isFinite(d)) worst = Math.max(worst, d); else unmeasurable++;
+    }
   }
-  if (matched === 0) return { varianceMeters: 0, matched: 0, flag: "insufficient-data" };
+  // Only a genuinely empty comparison is "insufficient-data". If the app
+  // reported positions and the vehicle corroborated none of them, that is the
+  // signal — a spoofing device would otherwise defeat the check simply by
+  // withholding the vehicle stream or time-shifting it past the match window.
+  if (app.length === 0) return { varianceMeters: 0, matched: 0, flag: "insufficient-data" };
+  if (matched === 0) return { varianceMeters: 0, matched: 0, flag: "review" };
+  if (unmeasurable > 0) return { varianceMeters: Math.round(worst), matched, flag: "review" };
   return { varianceMeters: Math.round(worst), matched, flag: worst > opts.thresholdMeters ? "review" : "none" };
 }
 

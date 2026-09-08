@@ -203,6 +203,10 @@ export interface JwtClaims {
   resource_access?: Record<string, { roles?: string[] }>;
 }
 
+/**
+ * Decodes without verifying the signature. Display only — never use the result
+ * to grant access. The API re-validates every token against the realm JWKS.
+ */
 export function decodeJwt(token: string): JwtClaims {
   try {
     const payload = token.split(".")[1];

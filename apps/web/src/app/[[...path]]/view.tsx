@@ -9,6 +9,7 @@ import { Callback } from "@/features/callback";
 import { TaskBoard } from "@/features/tasks";
 import { Dashboard, Tracking, Schedule, Gallery, RouteVisit, RouteConfig, RouteResult, FlowBuilder, Automation, WorkflowList, DataList, DataType, DataImport, DataExport, Users, Teams, Permissions, Hubs, Organization, CustomModule, Trash, NoAccess, Plan, Subscription, History, Lhs, Anomaly } from "@/features/views";
 import { VIEW_PATHS } from "@/lib/routes";
+import { authConfig, hasSession } from "@/lib/auth";
 
 const VIEWS: Record<string, () => React.ReactNode> = {
   callback: Callback,
@@ -27,14 +28,19 @@ export function View({ path }: { path: string }) {
   const { state, ready } = useDemo();
   const router = useRouter();
   const target = path === "" || path === "login" ? null : path;
+  // When Keycloak is configured, authentication is decided by holding a token,
+  // not by a persisted `session` flag: the flag can be set by the demo login,
+  // written straight into storage, or left true after a failed refresh already
+  // cleared the credentials.
+  const authenticated = authConfig() ? hasSession() : state.session;
   useEffect(() => {
     if (!ready) return;
-    if (state.session && path === "") router.replace("/dashboard/task");
-    if (!state.session && path !== "" && path !== "login") router.replace("/login");
-  }, [ready, state.session, path, router]);
+    if (authenticated && path === "") router.replace("/dashboard/task");
+    if (!authenticated && path !== "" && path !== "login") router.replace("/login");
+  }, [ready, authenticated, path, router]);
   if (!ready) return <main className="boot"><p>Loading demo workspace…</p></main>;
   if (target === "callback") return <Callback />;
-  if (!state.session || target === null) return <DemoLogin/>;
+  if (!authenticated || target === null) return <DemoLogin/>;
   const Component = VIEWS[target] ?? Dashboard;
   return <Shell path={VIEW_PATHS.includes(target) || target === "lhs" || target === "anomaly" ? target : "dashboard/task"}><Component/></Shell>;
 }

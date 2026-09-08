@@ -32,7 +32,7 @@ test("corridor distance and hysteresis", () => {
   assert.ok(distanceToCorridorMeters(far, corridor) > 400);
   assert.equal(evaluateCorridor([near, far], corridor, { radiusMeters: 100, consecutiveBreach: 2, maxAccuracyMeters: 50 }).offRoute, false);
   assert.equal(evaluateCorridor([far, { ...far, at: 3 }], corridor, { radiusMeters: 100, consecutiveBreach: 2, maxAccuracyMeters: 50 }).offRoute, true);
-  assert.equal(evaluateCorridor([{ ...far, accuracyMeters: 500 }], corridor, { radiusMeters: 100, consecutiveBreach: 1, maxAccuracyMeters: 50 }).reason, "inside");
+  assert.equal(evaluateCorridor([{ ...far, accuracyMeters: 500 }], corridor, { radiusMeters: 100, consecutiveBreach: 1, maxAccuracyMeters: 50 }).reason, "inaccurate");
   assert.equal(evaluateCorridor([near], [{ lat: 0, lng: 0 }], { radiusMeters: 100, consecutiveBreach: 1, maxAccuracyMeters: 50 }).reason, "insufficient-corridor");
 });
 test("gps stream comparison", () => {
@@ -43,7 +43,23 @@ test("gps stream comparison", () => {
   const diverged = compareGpsStreams({ app, vehicle: [{ lat: 0.01, lng: 0.01, at: t0 }] }, { maxTimeGapMs: 10000, thresholdMeters: 150 });
   assert.equal(diverged.flag, "review");
   const missing = compareGpsStreams({ app, vehicle: [{ lat: 0, lng: 0, at: t0 + FAR_FUTURE_MS }] }, { maxTimeGapMs: TEN_SECONDS_MS, thresholdMeters: 150 });
-  assert.equal(missing.flag, "insufficient-data");
+  assert.equal(missing.flag, "review");
+  assert.equal(compareGpsStreams({ app: [], vehicle: [] }, { maxTimeGapMs: TEN_SECONDS_MS, thresholdMeters: 150 }).flag, "insufficient-data");
+  // One unusable coordinate must not clear the batch: NaN is sticky through
+  // Math.max and false in every comparison, so it would otherwise read "none".
+  const poisoned = compareGpsStreams(
+    { app: [{ lat: Number.NaN, lng: 0, at: t0 }], vehicle: [{ lat: 0, lng: 0, at: t0 }] },
+    { maxTimeGapMs: TEN_SECONDS_MS, thresholdMeters: 150 },
+  );
+  assert.equal(poisoned.flag, "review");
+  // An unmeasurable sample must not reset the corridor breach streak.
+  const corridor = [{ lat: 0, lng: 0 }, { lat: 0, lng: 0.01 }];
+  const off = { lat: 0.005, lng: 0.005, at: 1, accuracyMeters: 5 };
+  assert.equal(
+    evaluateCorridor([off, { lat: Number.NaN, lng: 0, at: 2 }, { ...off, at: 3 }], corridor,
+      { radiusMeters: 100, consecutiveBreach: 2, maxAccuracyMeters: 50 }).offRoute,
+    true,
+  );
 });
 test("daily aggregation", () => {
   const r = aggregateDaily(
