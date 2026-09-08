@@ -62,6 +62,18 @@ describe("csv export", () => {
     const csv = tasksCsv(sampleTasks.slice(0, 2));
     expect(csv.split("\r\n")).toHaveLength(3);
   });
+  it("guards formula triggers hidden behind leading whitespace", () => {
+    // Importers trim before evaluating, so the guard must look past the padding.
+    for (const cell of [" =1+1", "\t=1+1", "  +1", "\v@SUM(A1)", "-1+1"]) {
+      expect(csvCell(cell)).toMatch(/^"'/);
+    }
+    // ...without quoting ordinary text that merely starts with a space.
+    expect(csvCell(" Jakarta Pusat")).toBe('" Jakarta Pusat"');
+  });
+  it("keeps an injected newline or comma inside one field", () => {
+    const forged = tasksCsv([sampleTask({ id: "T-1", title: 'a",x\nFORGED,row' })]);
+    expect(forged.split("\r\n")).toHaveLength(2);
+  });
 });
 
 describe("i18n + routes", () => {

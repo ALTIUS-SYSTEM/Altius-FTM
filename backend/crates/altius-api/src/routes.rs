@@ -72,13 +72,19 @@ async fn health(State(s): State<Arc<AppState>>) -> Json<Value> {
     } else {
         false
     };
+    // Liveness only. Which third-party integrations are configured, and which
+    // routing backend is in use, is reconnaissance for an unauthenticated
+    // caller — it belongs in logs and an admin-gated diagnostics route.
+    tracing::debug!(
+        persistence,
+        maps = s.config.google_maps_api_key.is_some(),
+        maps_mode = ?s.config.google_route_mode,
+        agent = s.config.openrouter_api_key.is_some(),
+        "health probe"
+    );
     Json(json!({
-        "status": "ok",
+        "status": if persistence { "ok" } else { "degraded" },
         "service": "altius-api",
-        "persistence": persistence,
-        "maps": s.config.google_maps_api_key.is_some(),
-        "maps_mode": format!("{:?}", s.config.google_route_mode).to_lowercase(),
-        "agent": s.config.openrouter_api_key.is_some(),
     }))
 }
 
@@ -189,6 +195,19 @@ async fn org_of(s: &Arc<AppState>, subject: &str) -> ApiResult<String> {
         .ok_or(ApiError::Forbidden)
 }
 
+/// Gate for org-wide rosters and planning data. A Driver sees their own work,
+/// not the organization's user list, hub list or driver list.
+fn require_staff(principal: &AuthUser) -> ApiResult<()> {
+    if principal.has_role(Role::Admin)
+        || principal.has_role(Role::Supervisor)
+        || principal.has_role(Role::Lead)
+    {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
 async fn list_tasks(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
@@ -223,14 +242,16 @@ async fn create_task(
     principal: AuthUser,
     Json(task): Json<Task>,
 ) -> ApiResult<Json<Value>> {
-    if principal.has_role(Role::Driver) {
-        return Err(ApiError::Forbidden);
-    }
+    // Allow-list, not deny-list: a deny on Driver alone let every token that
+    // carried no recognised role through.
+    require_staff(&principal)?;
     let org = org_of(&s, &principal.subject).await?;
     store(&s)?
         .create_task(&org, &task)
         .await
-        .map_err(ApiError::Internal)?;
+        // The store rejects a hub outside the caller's org; that is the
+        // client's mistake, not an internal fault.
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     Ok(Json(json!({ "data": { "taskId": task.id } })))
 }
 
@@ -322,6 +343,7 @@ async fn list_users(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
 ) -> ApiResult<Json<Value>> {
+    require_staff(&principal)?;
     let org = org_of(&s, &principal.subject).await?;
     let users = store(&s)?.users_for_org(&org).await.map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": users, "meta": { "organization": org } })))
@@ -331,6 +353,7 @@ async fn list_hubs(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
 ) -> ApiResult<Json<Value>> {
+    require_staff(&principal)?;
     let org = org_of(&s, &principal.subject).await?;
     let hubs = store(&s)?.hubs_for_org(&org).await.map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": hubs, "meta": { "organization": org } })))
@@ -340,6 +363,7 @@ async fn list_drivers(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
 ) -> ApiResult<Json<Value>> {
+    require_staff(&principal)?;
     let org = org_of(&s, &principal.subject).await?;
     let drivers = store(&s)?.drivers_for_org(&org).await.map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": drivers, "meta": { "organization": org } })))
@@ -372,8 +396,13 @@ async fn list_costs(
 async fn record_report(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
-    Json(req): Json<altius_core::DailyReport>,
+    Json(mut req): Json<altius_core::DailyReport>,
 ) -> ApiResult<Json<Value>> {
+    // Submitting a report never approves it. `status` and `revision` are
+    // server-owned; accepting them from the body let a driver post their own
+    // LHS as `approved` and skip supervisor review entirely.
+    req.status = altius_core::LhsStatus::Submitted;
+    req.revision = 0;
     store(&s)?
         .record_daily_report(&req, &principal.subject)
         .await
@@ -394,8 +423,8 @@ async fn list_reports(
 
 fn dispatch_tools(state: &Arc<AppState>) -> Vec<agent::Tool> {
     vec![agent::Tool {
-        name: "plan_route",
-        description: "Order stops and return per-leg ETA in minutes",
+        name: "plan_route".into(),
+        description: "Order stops and return per-leg ETA in minutes".into(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -460,8 +489,7 @@ fn dispatch_tools(state: &Arc<AppState>) -> Vec<agent::Tool> {
 
 #[derive(serde::Deserialize)]
 struct ResumeRequest {
-    state: Value,
-    call: agent::ToolCall,
+    state: String,
     decision: String,
     #[serde(default)]
     reason: Option<String>,
@@ -487,21 +515,27 @@ async fn agent_resume(
         },
         _ => return Err(ApiError::BadRequest("decision must be approve|reject".into())),
     };
+    let secret = s
+        .config
+        .agent_state_secret
+        .as_deref()
+        .ok_or_else(|| ApiError::Unavailable("AGENT_STATE_SECRET not configured".into()))?;
     match agent::resume(
         &s.http,
         &key,
         &s.config.openrouter_model,
         &dispatch_tools(&s),
-        req.state,
-        &req.call,
+        &req.state,
+        secret,
+        &principal.subject,
         decision,
     )
     .await?
     {
         agent::AgentRun::Finished(text) => Ok(Json(json!({ "data": { "text": text } }))),
-        agent::AgentRun::AwaitingApproval { call, messages_json } => Ok(Json(json!({
+        agent::AgentRun::AwaitingApproval { call, state } => Ok(Json(json!({
             "data": { "status": "awaiting_approval", "call": call },
-            "meta": { "state": messages_json }
+            "meta": { "state": state }
         }))),
     }
 }
@@ -542,6 +576,11 @@ async fn dispatch_suggestion(
 
     let tools = dispatch_tools(&s);
 
+    let secret = s
+        .config
+        .agent_state_secret
+        .as_deref()
+        .ok_or_else(|| ApiError::Unavailable("AGENT_STATE_SECRET not configured".into()))?;
     match agent::run(
         &s.http,
         &key,
@@ -549,13 +588,15 @@ async fn dispatch_suggestion(
         "You are Altius dispatch. Suggest an efficient stop order and flag risks. Never write data without approval.",
         &serde_json::to_string(&input).unwrap_or_default(),
         &tools,
+        secret,
+        &principal.subject,
     )
     .await?
     {
         agent::AgentRun::Finished(text) => Ok(Json(json!({ "data": { "text": text } }))),
-        agent::AgentRun::AwaitingApproval { call, messages_json } => Ok(Json(json!({
+        agent::AgentRun::AwaitingApproval { call, state } => Ok(Json(json!({
             "data": { "status": "awaiting_approval", "call": call },
-            "meta": { "state": messages_json }
+            "meta": { "state": state }
         }))),
     }
 }

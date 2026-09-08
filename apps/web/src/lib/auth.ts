@@ -2,11 +2,10 @@
 
 /** Keycloak authorization-code + PKCE flow for the dashboard. */
 
+/** One-shot PKCE values only. Tokens are never written to web storage. */
 const STORAGE = {
   verifier: "altius.pkce.verifier",
-  access: "altius.token.access",
-  refresh: "altius.token.refresh",
-  expires: "altius.token.expires",
+  state: "altius.pkce.state",
 } as const;
 
 export interface AuthConfig {
@@ -33,17 +32,25 @@ const base64url = (buf: ArrayBuffer) =>
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 
-const randomString = (length: number) => {
-  const bytes = crypto.getRandomValues(new Uint8Array(length));
-  return Array.from(bytes, (b) => (b % 62).toString(36).padStart(1, "0"))
-    .join("")
-    .slice(0, length);
-};
+/** 256 bits from the CSPRNG, base64url-encoded. */
+const randomToken = () =>
+  base64url(crypto.getRandomValues(new Uint8Array(32)).buffer);
+
+/** Clear the single-use login parameters. Safe to call on any exit path. */
+export function clearLoginState() {
+  sessionStorage.removeItem(STORAGE.verifier);
+  sessionStorage.removeItem(STORAGE.state);
+}
 
 /** Redirect the browser to the Keycloak login page. */
 export async function startLogin(cfg: AuthConfig, redirectUri: string) {
-  const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)).buffer);
+  const verifier = randomToken();
+  const state = randomToken();
   sessionStorage.setItem(STORAGE.verifier, verifier);
+  // Persist the state so the callback can prove this response answers a login
+  // *this* tab started. Generating it and never checking it leaves the flow
+  // with no request-forgery defence at all.
+  sessionStorage.setItem(STORAGE.state, state);
   const challenge = base64url(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
   );
@@ -54,7 +61,7 @@ export async function startLogin(cfg: AuthConfig, redirectUri: string) {
     scope: "openid profile email",
     code_challenge: challenge,
     code_challenge_method: "S256",
-    state: randomString(16),
+    state,
   });
   window.location.assign(`${endpoints(cfg).authorize}?${params}`);
 }
@@ -64,9 +71,30 @@ export async function finishLogin(
   cfg: AuthConfig,
   code: string,
   redirectUri: string,
+  returnedState: string | null,
 ): Promise<void> {
   const verifier = sessionStorage.getItem(STORAGE.verifier);
-  if (!verifier) throw new Error("PKCE verifier missing — restart the login");
+  const expectedState = sessionStorage.getItem(STORAGE.state);
+  try {
+    if (!verifier || !expectedState)
+      throw new Error("Login session missing — restart the login");
+    if (!returnedState || returnedState !== expectedState)
+      throw new Error("Login state mismatch — restart the login");
+    await exchangeCode(cfg, code, redirectUri, verifier);
+  } finally {
+    // One-shot values: clear on success and on every failure, so an abandoned
+    // login cannot leave a live verifier for a forced callback to spend.
+    sessionStorage.removeItem(STORAGE.verifier);
+    sessionStorage.removeItem(STORAGE.state);
+  }
+}
+
+async function exchangeCode(
+  cfg: AuthConfig,
+  code: string,
+  redirectUri: string,
+  verifier: string,
+): Promise<void> {
   const res = await fetch(endpoints(cfg).token, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -80,30 +108,42 @@ export async function finishLogin(
   });
   if (!res.ok) throw new Error(`token exchange failed: ${res.status}`);
   await storeTokens(await res.json());
-  sessionStorage.removeItem(STORAGE.verifier);
 }
 
 const MS_PER_SECOND = 1000;
 const REFRESH_WINDOW_MS = 30_000;
+
+/**
+ * Tokens live in memory, not `sessionStorage`.
+ *
+ * This is a public OAuth client (no client secret), so a persisted refresh
+ * token is independently replayable against Keycloak from any machine — one
+ * moment of script execution on this origin would turn into durable account
+ * access. In memory, an XSS can steal at most the current short-lived access
+ * token, and a reload re-authenticates silently against the Keycloak SSO
+ * session instead of reading a long-lived credential back out of storage.
+ */
+let tokens: { access: string; refresh?: string; expiresAt: number } | null = null;
+/** De-duplicates concurrent refreshes; see `accessToken`. */
+let inflight: Promise<string | null> | null = null;
 
 const storeTokens = (t: {
   access_token: string;
   refresh_token?: string;
   expires_in: number;
 }) => {
-  sessionStorage.setItem(STORAGE.access, t.access_token);
-  if (t.refresh_token) sessionStorage.setItem(STORAGE.refresh, t.refresh_token);
-  sessionStorage.setItem(STORAGE.expires, String(Date.now() + t.expires_in * MS_PER_SECOND));
+  tokens = {
+    access: t.access_token,
+    refresh: t.refresh_token,
+    expiresAt: Date.now() + t.expires_in * MS_PER_SECOND,
+  };
 };
 
-/** Access token; refreshes transparently when within 30 s of expiry. */
-export async function accessToken(cfg: AuthConfig): Promise<string | null> {
-  const token = sessionStorage.getItem(STORAGE.access);
-  const expires = Number(sessionStorage.getItem(STORAGE.expires) ?? 0);
-  if (!token) return null;
-  if (Date.now() < expires - REFRESH_WINDOW_MS) return token;
+/** True when a live session exists; the route guard needs this, not a flag. */
+export const hasSession = () => tokens !== null;
 
-  const refresh = sessionStorage.getItem(STORAGE.refresh);
+async function refreshTokens(cfg: AuthConfig): Promise<string | null> {
+  const refresh = tokens?.refresh;
   if (!refresh) return null;
   const res = await fetch(endpoints(cfg).token, {
     method: "POST",
@@ -115,15 +155,45 @@ export async function accessToken(cfg: AuthConfig): Promise<string | null> {
     }),
   });
   if (!res.ok) {
-    logout();
+    // Only clear if nobody else has already rotated us onto a fresh token.
+    // Keycloak revokes the old refresh token on use, so a losing racer must
+    // not tear down the winner's freshly issued credentials.
+    if (tokens?.refresh === refresh) logout();
     return null;
   }
-  await storeTokens(await res.json());
-  return sessionStorage.getItem(STORAGE.access);
+  storeTokens(await res.json());
+  return tokens?.access ?? null;
+}
+
+/** Access token; refreshes transparently when within 30 s of expiry. */
+export async function accessToken(cfg: AuthConfig): Promise<string | null> {
+  if (!tokens) return null;
+  if (Date.now() < tokens.expiresAt - REFRESH_WINDOW_MS) return tokens.access;
+  // A dashboard mount fires several API calls at once. Without this, each one
+  // spends the same rotated refresh token and all but one gets a 400 — then
+  // calls logout() and destroys the winner's valid session.
+  inflight ??= refreshTokens(cfg).finally(() => {
+    inflight = null;
+  });
+  return inflight;
 }
 
 export function logout() {
-  Object.values(STORAGE).forEach((k) => sessionStorage.removeItem(k));
+  tokens = null;
+  sessionStorage.removeItem(STORAGE.verifier);
+  sessionStorage.removeItem(STORAGE.state);
+}
+
+/** End the Keycloak SSO session too, so a leaked token cannot be refreshed. */
+export function endSession(cfg: AuthConfig, redirectUri: string) {
+  logout();
+  const params = new URLSearchParams({
+    client_id: cfg.clientId,
+    post_logout_redirect_uri: redirectUri,
+  });
+  window.location.assign(
+    `${cfg.url}/realms/${cfg.realm}/protocol/openid-connect/logout?${params}`,
+  );
 }
 
 export interface JwtClaims {

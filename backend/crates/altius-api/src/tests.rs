@@ -19,6 +19,7 @@ fn test_state() -> Arc<AppState> {
         typedb_database: "test".into(),
         google_maps_api_key: None,
         google_route_mode: crate::config::GoogleRouteMode::Directions,
+        agent_state_secret: None,
         openrouter_api_key: None,
         openrouter_model: "test-model".into(),
         cors_origins: vec![],

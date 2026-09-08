@@ -38,16 +38,23 @@ pub struct Jwks {
 struct JwksState {
     keys: jsonwebtoken::jwk::JwkSet,
     fetched_at: Instant,
+    /// Last outbound attempt, successful or not. Rate-limits refetches driven
+    /// by unknown `kid`s, which come from the *unverified* token header.
+    attempted_at: Instant,
 }
 
 const JWKS_TTL: Duration = Duration::from_secs(300);
+/// Minimum gap between unknown-`kid`-triggered refetches.
+const JWKS_REFRESH_COOLDOWN: Duration = Duration::from_secs(30);
 
 impl Jwks {
     pub fn new(config: KeycloakConfig) -> Self {
+        let stale = Instant::now() - JWKS_TTL;
         Self {
             inner: Arc::new(RwLock::new(JwksState {
                 keys: jsonwebtoken::jwk::JwkSet { keys: vec![] },
-                fetched_at: Instant::now() - JWKS_TTL,
+                fetched_at: stale,
+                attempted_at: stale,
             })),
             config,
             http: reqwest::Client::new(),
@@ -55,6 +62,7 @@ impl Jwks {
     }
 
     async fn refresh(&self) -> Result<(), ApiError> {
+        self.inner.write().await.attempted_at = Instant::now();
         let set: jsonwebtoken::jwk::JwkSet = self
             .http
             .get(self.config.jwks_url())
@@ -73,8 +81,17 @@ impl Jwks {
     async fn find_key(&self, kid: &str) -> Result<jsonwebtoken::jwk::Jwk, ApiError> {
         let need_refresh = {
             let guard = self.inner.read().await;
-            guard.fetched_at.elapsed() > JWKS_TTL
-                || !guard.keys.keys.iter().any(|k| k.common.key_id.as_deref() == Some(kid))
+            let stale = guard.fetched_at.elapsed() > JWKS_TTL;
+            let unknown_kid = !guard
+                .keys
+                .keys
+                .iter()
+                .any(|k| k.common.key_id.as_deref() == Some(kid));
+            // `kid` is attacker-controlled and read before any signature check,
+            // so an unknown one must not buy an uncached outbound fetch on every
+            // request. Honour the TTL always; honour unknown-kid only outside
+            // the cooldown.
+            stale || (unknown_kid && guard.attempted_at.elapsed() > JWKS_REFRESH_COOLDOWN)
         };
         if need_refresh {
             self.refresh().await?;
@@ -108,7 +125,7 @@ impl Jwks {
             .map_err(|_| ApiError::Unauthorized)?;
         let claims = data.claims;
 
-        let roles = claims
+        let roles: Vec<Role> = claims
             .realm_access
             .roles
             .iter()
@@ -120,6 +137,15 @@ impl Jwks {
                 _ => None,
             })
             .collect();
+
+        // Unrecognised realm roles are dropped above, so any realm token —
+        // including a service account or a self-registered user with no fleet
+        // role — would otherwise arrive as an authenticated principal that
+        // every `has_role` check answers "false" for, i.e. a full reader of
+        // every route that only gates on Driver. Require a known role.
+        if roles.is_empty() {
+            return Err(ApiError::Forbidden);
+        }
 
         Ok(Principal {
             subject: claims.sub,

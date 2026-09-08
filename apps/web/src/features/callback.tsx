@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useDemo } from "@/components/demo-provider";
-import { authConfig, decodeJwt, finishLogin, type JwtClaims } from "@/lib/auth";
+import { authConfig, clearLoginState, decodeJwt, finishLogin, type JwtClaims } from "@/lib/auth";
 import type { DemoState } from "@/data/model";
 
 const ROLE_MAP: Record<string, DemoState["role"]> = {
@@ -38,13 +38,25 @@ export function Callback() {
       return;
     }
     const params = new URLSearchParams(window.location.search);
+    // Strip the query before doing anything else: on a failure the code is
+    // still unredeemed, and leaving it in the address bar puts it in history,
+    // session restore, and the Referer of any later subresource.
+    window.history.replaceState({}, "", window.location.pathname);
+
+    const oauthError = params.get("error");
+    if (oauthError) {
+      clearLoginState();
+      setError(params.get("error_description") ?? `Sign-in failed: ${oauthError}`);
+      return;
+    }
     const code = params.get("code");
     if (!code) {
+      clearLoginState();
       setError("Authorization code is missing from the callback URL.");
       return;
     }
     const redirectUri = `${window.location.origin}/callback`;
-    finishLogin(cfg, code, redirectUri)
+    finishLogin(cfg, code, redirectUri, params.get("state"))
       .then(() => {
         const token = sessionStorage.getItem("altius.token.access");
         const claims = token ? decodeJwt(token) : {};

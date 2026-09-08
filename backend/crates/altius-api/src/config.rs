@@ -27,6 +27,9 @@ pub struct Config {
     pub google_maps_api_key: Option<String>,
     /// Google route mode: `directions` (default), `optimization`, or `routes`.
     pub google_route_mode: GoogleRouteMode,
+    /// HMAC secret sealing paused agent runs. Without it the agent endpoints
+    /// refuse to pause, because an unsigned run state is a forgeable one.
+    pub agent_state_secret: Option<String>,
     pub openrouter_api_key: Option<String>,
     pub openrouter_model: String,
     /// Comma-separated allowed browser origins; empty = deny cross-origin.
@@ -76,6 +79,7 @@ impl Config {
             google_route_mode: GoogleRouteMode::from_str(
                 &std::env::var("GOOGLE_ROUTE_MODE").unwrap_or_else(|_| "directions".into()),
             ),
+            agent_state_secret: std::env::var("AGENT_STATE_SECRET").ok(),
             openrouter_api_key: std::env::var("OPENROUTER_API_KEY").ok(),
             openrouter_model: std::env::var("OPENROUTER_MODEL")
                 .unwrap_or_else(|_| "openai/gpt-4o-mini".into()),
