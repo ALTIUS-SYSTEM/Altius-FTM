@@ -446,7 +446,7 @@ class SettingsTab extends StatelessWidget {
           Card(child: Column(children: [
             ListTile(leading: const Icon(Icons.outbox_rounded), title: Text(s('history')), subtitle: Text('$pending ${s('pending')}'), trailing: TextButton(onPressed: () => cubit.act(() async {
               final base = await cubit.store.preference('apiBase');
-              final token = await cubit.store.preference('accessToken');
+              final token = await cubit.store.accessToken();
               if (base.isNotEmpty && token.isNotEmpty) {
                 try {
                   await cubit.store.syncNow(baseUrl: base, accessToken: token);

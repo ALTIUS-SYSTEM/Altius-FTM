@@ -21,7 +21,10 @@ export const GpsObservationSchema = z.object({
   if (value.quality === 'unavailable' && (value.position !== null || value.accuracyMeters !== null)) context.addIssue({ code: 'custom', message: 'Unavailable observation must not contain a fix' });
   if (value.quality !== 'unavailable' && (value.position === null || value.accuracyMeters === null)) context.addIssue({ code: 'custom', message: 'GPS fix requires position and accuracy' });
 }).readonly();
-export const LocationHistorySchema = z.object({ tenantId: IdSchema, hubId: IdSchema, driverId: IdSchema, observations: z.array(GpsObservationSchema).readonly() }).strict().superRefine((value, context) => {
+/** A vehicle-sourced fix must name the vehicle it came from: `compareGpsStreams`
+ *  derives all of its value from the two streams being independently sourced,
+ *  and that independence was asserted by the party being checked. */
+export const LocationHistorySchema = z.object({ tenantId: IdSchema, hubId: IdSchema, driverId: IdSchema, observations: z.array(GpsObservationSchema).max(5000).readonly() }).strict().superRefine((value, context) => {
   if (value.observations.some(item => item.tenantId !== value.tenantId || item.hubId !== value.hubId || item.driverId !== value.driverId)) context.addIssue({ code: 'custom', message: 'Observation scope mismatch' });
   if (new Set(value.observations.map(item => item.id)).size !== value.observations.length) context.addIssue({ code: 'custom', message: 'Duplicate observation' });
 }).readonly();

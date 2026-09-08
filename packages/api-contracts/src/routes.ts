@@ -13,15 +13,15 @@ export const StopTimingSchema = z.object({ stopId: IdSchema, plannedEta: EtaEsti
 export const RoutePlanSchema = z.object({
   id: IdSchema, tenantId: IdSchema, hubId: IdSchema, driverId: IdSchema, version: RevisionSchema, createdAtUtc: UtcTimestampSchema,
   source: z.enum(['demo_graph', 'directions_provider', 'manual']),
-  orderedStopIds: z.array(IdSchema).min(1).refine(ids => new Set(ids).size === ids.length, 'Duplicate route stops').readonly(),
-  polyline: z.array(CoordinateSchema).min(2).readonly(),
+  orderedStopIds: z.array(IdSchema).min(1).max(500).refine(ids => new Set(ids).size === ids.length, 'Duplicate route stops').readonly(),
+  polyline: z.array(CoordinateSchema).min(2).max(10000).readonly(),
   distanceMeters: z.number().finite().nonnegative(),
   travelSeconds: NonnegativeIntegerSchema,
-  timings: z.array(StopTimingSchema).readonly()
+  timings: z.array(StopTimingSchema).max(500).readonly()
 }).strict().superRefine((value, context) => {
   if (new Set(value.timings.map(timing => timing.stopId)).size !== value.timings.length || value.timings.some(timing => !value.orderedStopIds.includes(timing.stopId))) context.addIssue({ code: 'custom', message: 'Unknown or duplicate stop timing' });
 }).readonly();
-export const RouteComparisonSchema = z.object({ routeId: IdSchema, routeVersion: RevisionSchema, tenantId: IdSchema, hubId: IdSchema, driverId: IdSchema, observationIds: z.array(IdSchema).readonly(), recordedDistanceMeters: z.number().finite().nonnegative().nullable(), coverage: z.enum(['complete', 'partial', 'missing']), assessedAtUtc: UtcTimestampSchema }).strict().readonly();
+export const RouteComparisonSchema = z.object({ routeId: IdSchema, routeVersion: RevisionSchema, tenantId: IdSchema, hubId: IdSchema, driverId: IdSchema, observationIds: z.array(IdSchema).max(5000).readonly(), recordedDistanceMeters: z.number().finite().nonnegative().nullable(), coverage: z.enum(['complete', 'partial', 'missing']), assessedAtUtc: UtcTimestampSchema }).strict().readonly();
 export const GpsReviewSchema = z.object({ id: IdSchema, tenantId: IdSchema, hubId: IdSchema, driverId: IdSchema, appObservationId: IdSchema, vehicleObservationId: IdSchema.nullable(), classification: z.enum(['consistent', 'review_required', 'insufficient_data']), separationMeters: z.number().finite().nonnegative().nullable(), timeDeltaSeconds: z.number().finite().nonnegative().nullable(), reason: z.enum(['within_tolerance', 'separation', 'missing_pair', 'poor_accuracy', 'stale', 'scope_mismatch']), reviewedBy: IdSchema.nullable() }).strict().readonly();
 export type EtaEstimate = z.infer<typeof EtaEstimateSchema>;
 export type ActualArrival = z.infer<typeof ActualArrivalSchema>;

@@ -13,7 +13,10 @@ export const TimeZoneSchema = z.string().min(1).max(100).refine(value => {
 export const CoordinateSchema = z.object({ latitude: z.number().finite().min(-90).max(90), longitude: z.number().finite().min(-180).max(180) }).strict().readonly();
 export const NonnegativeIntegerSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const RevisionSchema = NonnegativeIntegerSchema;
-export const MoneySchema = z.object({ amountMinor: NonnegativeIntegerSchema, currency: z.string().regex(/^[A-Z]{3}$/) }).strict().readonly();
+/** 10^12 minor units is far above any real single line item and far below
+ *  MAX_SAFE_INTEGER, so sums stay exact. */
+export const MAX_AMOUNT_MINOR = 1_000_000_000_000;
+export const MoneySchema = z.object({ amountMinor: NonnegativeIntegerSchema.max(MAX_AMOUNT_MINOR), currency: z.string().regex(/^[A-Z]{3}$/) }).strict().readonly();
 export const TenantScopeSchema = z.object({ tenantId: IdSchema, hubId: IdSchema }).strict().readonly();
 export type DeviceTime = z.infer<typeof DeviceTimeSchema>;
 export type Coordinate = z.infer<typeof CoordinateSchema>;

@@ -17,18 +17,33 @@ export const haversineMeters = (a: GeoPoint, b: GeoPoint): number => {
 };
 
 export function dijkstra(graph: DemoGraph, start: string, goal: string): { path: string[]; cost: number } | null {
-  if (!graph[start]) return null;
+  // Node names are client-supplied stop ids. Bracket access on a plain object
+  // reaches Object.prototype, so a node called "constructor" or "toString"
+  // resolves to an inherited function: the existence check passes and the
+  // adjacency loop then throws on a non-iterable.
+  const adj = new Map(Object.entries(graph).filter(([, e]) => Array.isArray(e)));
+  // A NaN weight passes `< 0` and then loses every comparison, silently
+  // removing the edge from consideration instead of failing. Validate the whole
+  // graph once rather than only the edges reached before the goal.
+  for (const edges of adj.values()) {
+    for (const e of edges) {
+      if (e.weight < 0) throw new Error("Negative edge weights are unsupported");
+      // NaN/Infinity pass `< 0` and then lose every comparison, silently
+      // dropping the edge instead of failing. No route is the honest answer.
+      if (!Number.isFinite(e.weight)) return null;
+    }
+  }
+  if (!adj.has(start)) return null;
   const dist = new Map<string, number>([[start, 0]]);
   const prev = new Map<string, string>();
-  const open = new Set(Object.keys(graph));
-  for (const edges of Object.values(graph)) for (const e of edges) if (!dist.has(e.to)) { open.add(e.to); dist.set(e.to, Infinity); }
+  const open = new Set(adj.keys());
+  for (const edges of adj.values()) for (const e of edges) if (!dist.has(e.to)) { open.add(e.to); dist.set(e.to, Infinity); }
   while (open.size) {
     let node = "", best = Infinity;
     for (const n of open) if ((dist.get(n) ?? Infinity) < best) { best = dist.get(n)!; node = n; }
     if (!node || node === goal) break;
     open.delete(node);
-    for (const e of graph[node] ?? []) {
-      if (e.weight < 0) throw new Error("Negative edge weights are unsupported");
+    for (const e of adj.get(node) ?? []) {
       const alt = best + e.weight;
       if (alt < (dist.get(e.to) ?? Infinity)) { dist.set(e.to, alt); prev.set(e.to, node); }
     }
@@ -93,9 +108,15 @@ export interface AnomalyResult { varianceMeters: number; matched: number; flag: 
 
 export function compareGpsStreams({ app, vehicle }: StreamPair, opts: { maxTimeGapMs: number; thresholdMeters: number }): AnomalyResult {
   let matched = 0, worst = 0, unmeasurable = 0;
-  for (const a of app) {
-    let bestDelta = Infinity, best: GeoSample | null = null;
-    for (const v of vehicle) { const d = Math.abs(a.at - v.at); if (d < bestDelta) { bestDelta = d; best = v; } }
+  // Sort once and advance a single pointer: the nested scan was O(n*m) over two
+  // arrays whose size the uploading device chooses, so one accepted upload —
+  // not a flood — determined the cost.
+  const byTime = [...vehicle].filter(v => Number.isFinite(v.at)).sort((x, y) => x.at - y.at);
+  let cursor = 0;
+  for (const a of [...app].sort((x, y) => x.at - y.at)) {
+    while (cursor + 1 < byTime.length && Math.abs(byTime[cursor + 1]!.at - a.at) <= Math.abs(byTime[cursor]!.at - a.at)) cursor++;
+    const best: GeoSample | null = byTime[cursor] ?? null;
+    const bestDelta = best ? Math.abs(a.at - best.at) : Infinity;
     if (best && bestDelta <= opts.maxTimeGapMs) {
       matched++;
       const d = haversineMeters(a, best);
@@ -117,6 +138,19 @@ export function aggregateDaily(events: readonly { kind: string; entity: string; 
   return {
     completedStops: new Set(today.filter(e => e.kind === "done").map(e => e.entity)).size,
     visitedStops: new Set(today.filter(e => e.kind === "arrived").map(e => e.entity)).size,
-    totalCost: costs.filter(c => c.day === day).reduce((sum, c) => sum + c.amount, 0),
+    // Amounts are integer minor units. A non-finite or negative entry used to
+    // poison or quietly reduce the whole day's total; count it instead so a
+    // non-zero residual can be reconciled rather than silently absorbed.
+    ...sumCosts(costs, day),
   };
+}
+
+function sumCosts(costs: readonly { amount: number; day: string }[], day: string) {
+  let totalCost = 0, rejectedCosts = 0;
+  for (const c of costs) {
+    if (c.day !== day) continue;
+    if (!Number.isSafeInteger(c.amount) || c.amount < 0) { rejectedCosts++; continue; }
+    totalCost += c.amount;
+  }
+  return { totalCost, rejectedCosts };
 }

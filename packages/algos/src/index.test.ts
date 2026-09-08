@@ -65,5 +65,8 @@ test("daily aggregation", () => {
   const r = aggregateDaily(
     [{ kind: "arrived", entity: "t1", day: "2026-09-07" }, { kind: "done", entity: "t1", day: "2026-09-07" }, { kind: "arrived", entity: "t2", day: "2026-09-07" }],
     [{ amount: 50000, day: "2026-09-07" }, { amount: 1000, day: "2026-09-06" }], "2026-09-07");
-  assert.deepEqual(r, { completedStops: 1, visitedStops: 2, totalCost: 50000 });
+  assert.deepEqual(r, { completedStops: 1, visitedStops: 2, totalCost: 50000, rejectedCosts: 0 });
+  // A malformed amount is counted, not silently folded into the total.
+  const bad = aggregateDaily([], [{ amount: Number.NaN, day: "2026-09-07" }, { amount: -5, day: "2026-09-07" }], "2026-09-07");
+  assert.deepEqual(bad, { completedStops: 0, visitedStops: 0, totalCost: 0, rejectedCosts: 2 });
 });

@@ -17,6 +17,22 @@ void main() {
     await directory.delete(recursive: true);
   });
 
+  test('server URL must be https with a host', () {
+    // A plain http:// base sends the driver's password, and every later bearer
+    // token, in the clear — so this guard is the whole defence.
+    for (final bad in [
+      'http://api.altius.test',
+      'api.altius.test',
+      'https://',
+      'ftp://api.altius.test',
+      'javascript:alert(1)',
+      '',
+    ]) {
+      expect(() => parseServerUrl(bad), throwsArgumentError, reason: bad);
+    }
+    expect(parseServerUrl('  https://api.altius.test  ').host, 'api.altius.test');
+  });
+
   test('arrival, activity, completion require trip and exact sequence', () async {
     await expectLater(store.advance('JKT-001', TaskStage.arrived), throwsStateError);
     await store.startTrip();

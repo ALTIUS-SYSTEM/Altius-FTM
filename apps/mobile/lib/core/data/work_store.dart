@@ -4,6 +4,44 @@ import 'dart:io';
 import 'dart:math';
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+/// Where bearer credentials live. Backed by the platform keystore/keychain in
+/// production; the SQLite `preferences` table is app-private but unencrypted,
+/// so a stolen device, an unencrypted backup, or root access reads it directly.
+abstract class TokenStore {
+  Future<String> read(String key);
+  Future<void> write(String key, String value);
+  Future<void> clear();
+}
+
+class SecureTokenStore implements TokenStore {
+  const SecureTokenStore();
+  static const _keys = ['accessToken', 'refreshToken', 'accessExpiresAt'];
+  static const _secure = FlutterSecureStorage(
+    iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device),
+  );
+  @override
+  Future<String> read(String key) async => await _secure.read(key: key) ?? '';
+  @override
+  Future<void> write(String key, String value) => _secure.write(key: key, value: value);
+  @override
+  Future<void> clear() async {
+    for (final k in _keys) {
+      await _secure.delete(key: k);
+    }
+  }
+}
+
+/// Rejects anything that is not HTTPS with a host. A plain `http://` base sends
+/// the driver's password and every later bearer token in the clear.
+Uri parseServerUrl(String raw) {
+  final uri = Uri.tryParse(raw.trim());
+  if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) {
+    throw ArgumentError('invalidServer');
+  }
+  return uri;
+}
 
 enum TaskStage { assigned, arrived, working, done }
 
@@ -104,14 +142,16 @@ class _Database extends GeneratedDatabase {
 }
 
 class WorkStore {
-  WorkStore.open(String path, {DateTime Function()? now, int Function()? offset})
+  WorkStore.open(String path, {DateTime Function()? now, int Function()? offset, TokenStore? tokens})
     : _db = _Database(NativeDatabase(File(path), setup: (db) {
         db.execute('PRAGMA journal_mode=WAL');
         db.execute('PRAGMA synchronous=FULL');
       })),
       _now = now ?? DateTime.now,
-      _offset = offset ?? (() => DateTime.now().timeZoneOffset.inMinutes);
+      _offset = offset ?? (() => DateTime.now().timeZoneOffset.inMinutes),
+      _tokens = tokens ?? const SecureTokenStore();
   final _Database _db;
+  final TokenStore _tokens;
   final DateTime Function() _now;
   final int Function() _offset;
   Future<void> _tail = Future.value();
@@ -149,10 +189,12 @@ class WorkStore {
   Future<String> draft(String key) => preference('draft:$key');
   Future<void> session(bool active) => _write(() => _pref('session', active ? 'true' : ''));
 
+  /// Bearer token for outbound calls. Never stored in the SQLite preferences.
+  Future<String> accessToken() => _tokens.read('accessToken');
+
   Future<void> login(String baseUrl, String username, String password) async {
-    final url = baseUrl.trim();
-    if (url.isEmpty) throw ArgumentError('required');
     if (username.isEmpty || password.isEmpty) throw ArgumentError('required');
+    final url = parseServerUrl(baseUrl).toString().replaceAll(RegExp(r'/+$'), '');
     final client = HttpClient();
     String? accessToken;
     String? refreshToken;
@@ -187,31 +229,37 @@ class WorkStore {
     } finally {
       client.close();
     }
+    await _tokens.write('accessToken', accessToken);
+    await _tokens.write('refreshToken', refreshToken ?? '');
+    if (expiresIn != null) {
+      await _tokens.write(
+        'accessExpiresAt',
+        _now().toUtc().add(Duration(seconds: expiresIn)).toIso8601String(),
+      );
+    }
     await _write(() async {
       await _pref('apiBase', url);
-      await _pref('accessToken', accessToken ?? '');
-      await _pref('refreshToken', refreshToken ?? '');
       await _pref('driverId', username);
-      if (expiresIn != null) {
-        final expiresAt = _now().toUtc().add(Duration(seconds: expiresIn)).toIso8601String();
-        await _pref('accessExpiresAt', expiresAt);
-      }
       if (organization != null && organization.isNotEmpty) await _pref('organization', organization);
       if (hub != null && hub.isNotEmpty) await _pref('hub', hub);
       await _pref('session', 'true');
     });
   }
 
-  Future<void> logout() => _write(() async {
-    await _pref('session', '');
-    await _pref('accessToken', '');
-    await _pref('refreshToken', '');
-    await _pref('apiBase', '');
-    await _pref('accessExpiresAt', '');
-    await _pref('driverId', '');
-    await _pref('organization', 'Altius Demo');
-    await _pref('hub', 'Jakarta');
-  });
+  Future<void> logout() async {
+    await _tokens.clear();
+    await _write(() async {
+      await _pref('session', '');
+      await _pref('apiBase', '');
+      await _pref('driverId', '');
+      // Login drafts hold the previous driver's email and the private API
+      // hostname. On a pool device they outlive the session otherwise — and a
+      // leftover draft also blocks `selectWorkspace` with a misleading error.
+      await _db.customStatement("DELETE FROM preferences WHERE key LIKE 'draft:%'");
+      await _pref('organization', 'Altius Demo');
+      await _pref('hub', 'Jakarta');
+    });
+  }
   Future<void> language(String value) => _write(() async {
     if (!['en', 'id', 'th', 'ja', 'zh', 'fil', 'vi'].contains(value)) { throw ArgumentError('required'); }
     await _pref('language', value);

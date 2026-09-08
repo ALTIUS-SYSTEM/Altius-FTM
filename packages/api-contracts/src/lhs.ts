@@ -7,12 +7,13 @@ export const LhsStatusSchema = z.enum(['draft', 'submitted', 'revision_requested
 export const LhsReviewRevisionSchema = z.object({ revision: RevisionSchema, action: z.enum(['submit', 'request_revision', 'resubmit', 'approve']), actorId: IdSchema, atUtc: UtcTimestampSchema, note: z.string().min(1).max(2000).nullable() }).strict().superRefine((value, context) => {
   if (value.action === 'request_revision' && value.note === null) context.addIssue({ code: 'custom', message: 'Revision request requires a note' });
 }).readonly();
-export const LhsReportSchema = z.object({
+const lhsReportFields = z.object({
   id: IdSchema, tenantId: IdSchema, hubId: IdSchema, driverId: IdSchema, day: DateOnlySchema, timeZone: TimeZoneSchema, revision: RevisionSchema, status: LhsStatusSchema,
-  visitedTaskIds: z.array(IdSchema).readonly(), completedStopIds: z.array(IdSchema).readonly(), expenses: z.array(ExpenseSchema).readonly(), totals: z.array(MoneySchema).readonly(),
-  routeVersions: z.array(z.object({ routeId: IdSchema, version: RevisionSchema }).strict().readonly()).readonly(),
-  reviews: z.array(LhsReviewRevisionSchema).readonly()
-}).strict().superRefine((value, context) => {
+  visitedTaskIds: z.array(IdSchema).max(1000).readonly(), completedStopIds: z.array(IdSchema).max(2000).readonly(), expenses: z.array(ExpenseSchema).max(200).readonly(), totals: z.array(MoneySchema).max(16).readonly(),
+  routeVersions: z.array(z.object({ routeId: IdSchema, version: RevisionSchema }).strict().readonly()).max(100).readonly(),
+  reviews: z.array(LhsReviewRevisionSchema).max(100).readonly()
+}).strict();
+export const LhsReportSchema = lhsReportFields.superRefine((value, context) => {
   const issue = (message: string) => context.addIssue({ code: 'custom', message });
   if (new Set(value.visitedTaskIds).size !== value.visitedTaskIds.length || new Set(value.completedStopIds).size !== value.completedStopIds.length || new Set(value.expenses.map(expense => expense.id)).size !== value.expenses.length) issue('Duplicate report entries');
   if (value.expenses.some(expense => expense.tenantId !== value.tenantId || expense.hubId !== value.hubId || expense.driverId !== value.driverId)) issue('Expense scope mismatch');
@@ -42,3 +43,19 @@ export type LhsStatus = z.infer<typeof LhsStatusSchema>;
 export type LhsReviewRevision = z.infer<typeof LhsReviewRevisionSchema>;
 export type LhsReport = z.infer<typeof LhsReportSchema>;
 export type LhsSummary = z.infer<typeof LhsSummarySchema>;
+
+/**
+ * Request-side report: `status`, `revision` and `reviews` are server-owned.
+ *
+ * Accepting them from the submitting client let a driver post their own daily
+ * report as `approved`, naming any actor id as the approver — the money path
+ * with the review step removed. Approval transitions belong on their own
+ * endpoint, carrying only `{reportId, action, note}` with the actor taken from
+ * the token.
+ */
+export const LhsReportRequestSchema = lhsReportFields.omit({
+  status: true,
+  revision: true,
+  reviews: true,
+});
+export type LhsReportRequest = z.infer<typeof LhsReportRequestSchema>;
