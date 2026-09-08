@@ -201,6 +201,39 @@ list loads. A 403 there means `DEFAULT_ADMIN_SUB` does not match that user's ID.
 
 ---
 
+## 7b. When the host already has a reverse proxy
+
+`docker-compose.prod.yml` brings up its own Caddy on :80/:443. If something
+else on the host already owns those ports, add `docker-compose.sharededge.yml`
+as well: it drops our Caddy and publishes `api` and `keycloak` on loopback
+(8096/8097 by default, overridable with `ALTIUS_API_PORT` / `ALTIUS_KC_PORT`).
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+               -f docker-compose.sharededge.yml up -d --build --wait
+docker network connect altius-ftm_default <their-proxy-container>
+```
+
+Then route `/api/v3/*` to `altius-ftm-api-1:8080` and `/realms/*` plus
+`/resources/*` to `altius-ftm-keycloak-1:8081`, leaving `/admin` and
+`/metrics` unproxied.
+
+Changing a proxy config that other services depend on deserves a procedure,
+not a quick edit:
+
+1. Record how every existing site responds, so "unchanged" can be proven.
+2. Copy the config aside, and write the rollback script **before** the change.
+3. Edit a candidate copy; `caddy validate` it; only then move it into place.
+4. `caddy reload`, never restart — a reload is graceful and a config that
+   fails validation never reaches the running server.
+5. Re-check every existing site against step 1, then the new one.
+6. Run the rollback once and re-apply, so the undo path is tested rather than
+   assumed.
+
+Note what this topology gives up: `Caddyfile.backend` rate-limits
+`/api/v3/auth/*` to 10/min, and a stock Caddy image has no rate-limit module.
+Behind someone else's proxy, that protection is theirs to provide.
+
 ## 8. Operations
 
 ```bash

@@ -1,0 +1,45 @@
+# Altius FTM on a host that already has a reverse proxy.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#                  -f docker-compose.sharededge.yml up -d --build --wait
+#
+# Use this instead of letting docker-compose.prod.yml bring up its own Caddy
+# when something else on the host already owns :80 and :443. A second edge
+# cannot bind those ports, and forcing it would take TLS away from whatever is
+# already serving there.
+#
+# What this changes:
+#   - no Caddy of our own; the existing proxy routes to us
+#   - api and keycloak publish on loopback only, on ports chosen to avoid
+#     whatever the host already uses
+#   - postgres still publishes nothing at all
+#
+# The existing proxy needs to reach our containers. Put it on our network:
+#
+#   docker network connect altius-ftm_default <their-proxy-container>
+#
+# then proxy to `altius-ftm-api-1:8080` and `altius-ftm-keycloak-1:8081`.
+# Route /api/v3/*, /realms/* and /resources/*; leave /admin and /metrics
+# unproxied and reach the Keycloak console over an SSH tunnel instead.
+#
+# One thing is lost this way: Caddyfile.backend rate-limits /api/v3/auth/* to
+# 10/min via github.com/mholt/caddy-ratelimit, which a stock caddy image does
+# not carry. Behind someone else's proxy that protection is theirs to provide.
+#
+# Before touching a shared proxy config: back it up, record how every existing
+# site responds, validate the new config before reloading, and keep a rollback
+# script ready. A reload is graceful; a bad config that fails validation never
+# reaches the running server.
+services:
+  # Kept defined so this stays a pure diff, but out of every `up` that does not
+  # ask for the profile.
+  caddy:
+    profiles: ["own-edge"]
+
+  api:
+    ports: !override
+      - "127.0.0.1:${ALTIUS_API_PORT:-8096}:8080"
+
+  keycloak:
+    ports: !override
+      - "127.0.0.1:${ALTIUS_KC_PORT:-8097}:8081"
