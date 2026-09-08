@@ -4,6 +4,12 @@ packages:
   - apps/developer-portal
   - packages/*
 minimumReleaseAge: 10080
+
+# pnpm >= 10.x no longer reads the `pnpm` field in package.json, so this pin
+# lived on only because the existing lockfile still carried it — regenerating
+# the lockfile would have dropped it silently.
+overrides:
+  postcss: 8.5.26
 # Supply-chain hardening (pnpm ≥ 10.21 / 10.26).
 trustPolicy: no-downgrade
 blockExoticSubdeps: true
