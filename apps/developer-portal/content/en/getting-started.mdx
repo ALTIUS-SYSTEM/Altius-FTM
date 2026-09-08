@@ -1,0 +1,43 @@
+---
+title: Getting started
+description: Network prerequisites, first admin access, web dashboard, and mobile install.
+order: 2
+---
+
+## Prerequisites
+
+Your environment needs reachability to:
+
+1. **API** — HTTPS base URL for Altius FTM (paths under `/api/v3`)
+2. **Identity (Keycloak)** — realm issuer used by web and mobile (OIDC discovery)
+3. **Web dashboard** — browser origin where staff sign in
+4. **Mobile** — store or enterprise build pointed at the same API and issuer
+
+Ask your Altius contact for the production URLs. Local developer defaults are documented in your deployment pack.
+
+## First admin
+
+1. Receive an admin username (or invite) for the Altius realm.
+2. Open the **web dashboard** and sign in (authorization code + PKCE).
+3. Confirm you can see your **organization** and at least one **hub**.
+4. Invite or provision drivers and supervisors as needed.
+
+## Web dashboard
+
+Staff work in the browser. OAuth starts only on the dashboard origin — bookmarks and CTAs should land on `/login` there.
+
+## Mobile field app
+
+1. Install the Altius field build for your platform.
+2. Ensure the app’s API base and Keycloak issuer match the environment.
+3. Sign in; the redirect URI uses the app scheme `com.altius.altius_field:/oauthredirect`.
+
+<Warning>
+Do not paste client secrets into mobile configuration. The mobile client is a **public** PKCE client.
+</Warning>
+
+## Next steps
+
+- [Identity & access](/en/guides/identity-and-access)
+- [Sync & data](/en/guides/sync-and-data)
+- [API authentication](/en/guides/api-authentication)

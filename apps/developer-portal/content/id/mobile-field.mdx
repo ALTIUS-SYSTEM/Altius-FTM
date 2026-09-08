@@ -1,0 +1,34 @@
+---
+title: Aplikasi lapangan
+description: Aplikasi pengemudi, kerja offline-first, dan catatan pengalihan OAuth.
+order: 5
+---
+
+Pengemudi memakai aplikasi seluler **Altius Field** untuk menerima tugas, merekam peristiwa lapangan, dan menyinkronkan dengan server.
+
+## Offline-first
+
+Aplikasi menyimpan data operasional di perangkat agar pengemudi tetap bekerja saat sinyal hilang. Tindakan tertunda mengantri lokal dan diunggah saat konektivitas kembali.
+
+## Autentikasi
+
+- Masuk memakai **Keycloak PKCE** melalui klien `altius-mobile`.
+- Token akses dan refresh berada di **penyimpanan aman perangkat**, bukan di tabel preferensi biasa.
+- URI pengalihan (jangan diubah sembarangan): `com.altius.altius_field:/oauthredirect`
+
+<Warning>
+Alamat operasional, peristiwa GPS, dan laporan dapat berada di SQLite privat aplikasi. Perlakukan perangkat hilang sebagai insiden data; enkripsi disk dan kebijakan MDM penting.
+</Warning>
+
+## Perilaku sync (sudut pandang pengemudi)
+
+1. Bekerja offline bila perlu.
+2. Saat online, aplikasi mengirim peristiwa antrian ke API.
+3. Server mengembalikan **tanda terima** berdasarkan id peristiwa — aplikasi mencocokkan id tersebut, bukan posisi daftar.
+4. Daftar tugas diperbarui dari server setelah sync berhasil.
+
+Detail untuk integrator: [Sinkronisasi & data](/id/guides/sync-and-data).
+
+## Izin
+
+Harapkan permintaan lokasi (dan notifikasi jika diaktifkan). Menolak lokasi dapat memutus fitur geofence dan pelacakan yang diandalkan organisasi Anda.

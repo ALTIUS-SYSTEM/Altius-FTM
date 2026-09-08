@@ -6,7 +6,7 @@
 
 ## Scope
 
-This policy covers the Altius-FTM monorepo: `apps/web`, `apps/landing`, `apps/mobile`, `packages/*`, and `backend/`.
+This policy covers the Altius-FTM monorepo: `apps/web`, `apps/landing`, `apps/developer-portal`, `apps/mobile`, `packages/*`, and `backend/`.
 
 ## Reporting a vulnerability
 

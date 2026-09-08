@@ -16,10 +16,12 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
+import { docsHomeUrl } from "@/lib/docs";
 import { webLoginUrl } from "@/lib/web-app";
 
 export function Navigation2() {
   const loginHref = webLoginUrl();
+  const docsHref = docsHomeUrl();
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [dark, setDark] = useState(false);
@@ -83,9 +85,9 @@ export function Navigation2() {
       },
       {
         icon: FileText,
-        title: "Field Notes",
-        description: "Stories and insights",
-        href: "#blog",
+        title: "Altius-FTM Docs",
+        description: "Guides for IT and integrators",
+        href: docsHref,
       },
       {
         icon: MessageCircle,

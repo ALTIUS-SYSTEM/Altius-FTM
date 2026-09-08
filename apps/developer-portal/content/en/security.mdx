@@ -1,0 +1,33 @@
+---
+title: Security
+description: Where data lives, transport security, and how to report vulnerabilities.
+order: 8
+---
+
+## Data locations (summary)
+
+| Location | Examples |
+|---|---|
+| Server database | Tasks, events, org membership |
+| Mobile device (app-private storage) | Cached tasks, queued events, operational addresses/GPS until synced or cleared |
+| Secure device storage | OAuth tokens |
+| Browser memory (web) | Access token after PKCE login |
+
+Maps and LLM provider keys remain **server-side** only.
+
+## Transport
+
+Use HTTPS for API, IdP, and dashboard in all shared or production environments. Prefer encrypted database connections outside private networks.
+
+## Reporting vulnerabilities
+
+Email security reports through the private channel your Altius / Antero contact provides. **Do not** open a public issue with exploit details.
+
+Include component, version, reproduction steps, and impact. Acknowledgement target is within five business days where staffing allows.
+
+## Customer IT controls
+
+- Least-privilege roles
+- Prompt offboarding in Keycloak
+- Device MDM and wipe procedures for field phones
+- Review IdP redirect URI allowlists when adding domains

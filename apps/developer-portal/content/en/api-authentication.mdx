@@ -1,0 +1,44 @@
+---
+title: API authentication
+description: Bearer JWT from Keycloak — how to call /api/v3 safely.
+order: 7
+---
+
+## Calling the API
+
+```http
+Authorization: Bearer <access_token>
+Content-Type: application/json
+```
+
+Obtain the access token from Keycloak:
+
+- **People / interactive apps:** authorization code + PKCE (`altius-web`, `altius-mobile`)
+- **Systems:** coordinated confidential client (arranged with Altius) — not a self-serve API key UI
+
+Optional hydrate: `GET /api/v3/auth/me`.
+
+## Conventions (short)
+
+| Topic | Rule |
+|---|---|
+| Prefix | `/api/v3` |
+| JSON | **snake_case** on the wire |
+| Errors | `{ "error": { "code": <httpStatus>, "message": "…" } }` |
+| Tenant | From membership of the token subject — do not trust client-only tenant fields |
+
+## Try it in this portal
+
+Open the [API reference](/en/api) (Scalar). Paste a valid Bearer token to exercise live requests against your configured API base.
+
+<Warning>
+Password-grant login endpoints are for trusted private tooling only and should remain off in production. Do not use them as a substitute for PKCE or a proper service client.
+</Warning>
+
+## Clients
+
+| Client ID | Type |
+|---|---|
+| `altius-web` | Public SPA |
+| `altius-mobile` | Public native |
+| Audience target | API validates tokens intended for the Altius API audience |

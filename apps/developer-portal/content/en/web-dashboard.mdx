@@ -1,0 +1,33 @@
+---
+title: Web dashboard
+description: High-level staff surfaces on the Altius operations workspace.
+order: 4
+---
+
+The web dashboard is where office and hub staff run day-to-day FTM operations.
+
+## Typical capabilities
+
+- Sign in via Keycloak (PKCE)
+- Select **organization** / **hub** context when permitted
+- Create and update **tasks** and stops
+- Assign work to drivers
+- Monitor progress and exceptions
+- Use maps-related features when the environment provides routing/ETA through the API
+
+## Who should use it
+
+| Persona | Focus |
+|---|---|
+| Admin | Users, hubs, org settings |
+| Supervisor / Lead | Dispatch board, assignments, exceptions |
+| Integrators | Rarely — prefer API + this portal; use dashboard only to validate UX |
+
+## Browser notes
+
+- Keep the dashboard on the **configured web origin** so OAuth redirect URIs stay valid.
+- Session tokens for the SPA live in browser memory after login — treat shared machines carefully.
+
+<Tip>
+Deep-link marketing or intranet CTAs to the dashboard `/login` route, not to this developer portal.
+</Tip>

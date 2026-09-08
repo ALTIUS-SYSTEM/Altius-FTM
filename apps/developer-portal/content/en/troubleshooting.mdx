@@ -1,0 +1,34 @@
+---
+title: Troubleshooting
+description: Common login, sync, and maps issues for IT support.
+order: 9
+---
+
+## Cannot sign in (web or mobile)
+
+1. Confirm the user exists and is enabled in Keycloak.
+2. Confirm the user has a fleet role (admin / supervisor / lead / driver).
+3. Confirm redirect URIs match the exact dashboard or app scheme.
+4. Check clock skew on the device (JWT `exp` / `nbf`).
+
+## Sync stuck or events rejected
+
+1. Refresh the access token and retry.
+2. Inspect whether receipts were matched by **event id** (not list index).
+3. Confirm the device is online and the API base is correct.
+4. Ask whether payload validation failed (malformed stop transition, missing fields).
+
+## Maps / ETA unavailable
+
+Routing and static maps depend on server-side configuration. If ETA endpoints return unavailable, contact Altius ops — clients do not ship Maps API keys.
+
+## 401 / 403 from API
+
+| Status | Likely cause |
+|---|---|
+| 401 | Missing/expired/invalid Bearer token |
+| 403 | Authenticated but missing required role or membership |
+
+## Still stuck
+
+Collect: approximate time, user id (not password), device/OS, app or browser version, request id if shown — avoid pasting full address lists or tokens into tickets.

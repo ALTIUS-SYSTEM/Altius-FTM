@@ -1,0 +1,29 @@
+---
+title: Sync and data
+description: How mobile events sync to the server and how receipts must be matched.
+order: 6
+---
+
+## Event upload
+
+Drivers upload device events in batches to the API. Each event carries a stable **event id** generated on the device.
+
+## Receipts
+
+The server responds with per-event receipts. Clients **must** match receipts by `event_id` / `server_event_id` — **never** by array index.
+
+Matching by position can mis-ack events when the server reorders, filters, or partially accepts a batch.
+
+## Task refresh
+
+After uploading events, clients typically refresh the task list so local boards reflect server truth (assignments, stage changes, cancellations).
+
+## What IT should know
+
+- Sync failures are usually network, token expiry, or validation errors — see [Troubleshooting](/en/guides/troubleshooting).
+- Operational data on device may include addresses and GPS until wiped or superseded — treat lost devices as a data incident per your policy.
+- Server databases hold org-scoped operational history; retention follows your contract and environment policy.
+
+## Integrators
+
+When posting events from a non-mobile system, follow the same receipt matching rules documented in the [API reference](/en/api).

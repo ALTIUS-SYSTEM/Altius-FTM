@@ -2,6 +2,7 @@
 
 import { motion, useReducedMotion, type Variants } from "motion/react";
 import { ArrowRight } from "lucide-react";
+import { docsApiUrl, docsHomeUrl } from "@/lib/docs";
 
 const GithubIcon = () => (
   <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] fill-current" aria-hidden="true">
@@ -18,11 +19,45 @@ const LinkedinIcon = () => (
 const focusRing =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00677e] focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-white dark:focus-visible:ring-offset-neutral-950";
 
-const navGroups = [
-  { title: "Platform", links: ["Dispatch", "Routing", "Tracking", "Reports"] },
-  { title: "Build", links: ["Docs", "API reference", "Examples", "Status"] },
-  { title: "Company", links: ["About", "Careers", "Customers", "Contact"] },
-  { title: "Legal", links: ["Privacy", "Terms", "Security", "Cookies"] },
+type FooterLink = { label: string; href: string };
+
+const navGroups: { title: string; links: FooterLink[] }[] = [
+  {
+    title: "Platform",
+    links: [
+      { label: "Dispatch", href: "#features" },
+      { label: "Routing", href: "#features" },
+      { label: "Tracking", href: "#how-it-works" },
+      { label: "Reports", href: "#stats" },
+    ],
+  },
+  {
+    title: "Build",
+    links: [
+      { label: "Altius-FTM Docs", href: "__DOCS__" },
+      { label: "API reference", href: "__DOCS_API__" },
+      { label: "Examples", href: "__DOCS__" },
+      { label: "Status", href: "#" },
+    ],
+  },
+  {
+    title: "Company",
+    links: [
+      { label: "About", href: "#about" },
+      { label: "Careers", href: "#" },
+      { label: "Customers", href: "#" },
+      { label: "Contact", href: "#faq" },
+    ],
+  },
+  {
+    title: "Legal",
+    links: [
+      { label: "Privacy", href: "#" },
+      { label: "Terms", href: "#" },
+      { label: "Security", href: "#" },
+      { label: "Cookies", href: "#" },
+    ],
+  },
 ];
 
 const dispatches = ["Route radar", "Release notes", "Ops memo"];
@@ -50,6 +85,20 @@ const item: Variants = {
 
 export default function Footer12() {
   const reduce = useReducedMotion();
+  const docs = docsHomeUrl();
+  const docsApi = docsApiUrl();
+  const resolvedGroups = navGroups.map((group) => ({
+    ...group,
+    links: group.links.map((link) => ({
+      ...link,
+      href:
+        link.href === "__DOCS__"
+          ? docs
+          : link.href === "__DOCS_API__"
+            ? docsApi
+            : link.href,
+    })),
+  }));
 
   return (
     <footer className="w-full bg-white px-4 py-16 dark:bg-neutral-950 sm:px-6 sm:py-20 lg:px-8 lg:py-24">
@@ -169,19 +218,19 @@ export default function Footer12() {
               deadlines.
             </p>
           </div>
-          {navGroups.map((group) => (
+          {resolvedGroups.map((group) => (
             <nav key={group.title} aria-label={group.title} className="min-w-0">
               <h3 className="mb-5 text-xs font-medium uppercase tracking-[0.16em] text-neutral-500 dark:text-neutral-500">
                 {group.title}
               </h3>
               <ul className="space-y-3">
                 {group.links.map((link) => (
-                  <li key={link}>
+                  <li key={link.label}>
                     <a
-                      href="#"
+                      href={link.href}
                       className={`rounded-sm text-sm text-neutral-600 transition-colors duration-200 hover:text-[#00677e] dark:text-neutral-400 dark:hover:text-cyan-300 ${focusRing}`}
                     >
-                      {link}
+                      {link.label}
                     </a>
                   </li>
                 ))}

@@ -1,0 +1,29 @@
+---
+title: Dasbor web
+description: Permukaan staf secara ringkas — dispatch, pantau, laporkan.
+order: 4
+---
+
+**Dasbor web** adalah ruang kerja operasi untuk administrator, supervisor, dan lead.
+
+## Apa yang dilakukan staf di sini
+
+- **Dispatch** — membuat dan menugaskan tugas lapangan; mengurutkan kunjungan jika routing diaktifkan.
+- **Pantau** — mengikuti pekerjaan berjalan, sinyal gaya ETA/ATA, serta tinjauan geofence / GPS.
+- **Roster** — memahami siapa yang tersedia di hub mana.
+- **Laporan** — meninjau laporan harian pengemudi dan ringkasan operasional.
+- **Admin** — pengaturan tingkat org dan keanggotaan (sesuai peran).
+
+## Masuk
+
+Buka URL dasbor Anda dan selesaikan login Keycloak. Setelah autentikasi, aplikasi menghidrasi profil dan keanggotaan Anda (`/api/v3/auth/me` di balik layar).
+
+## Catatan lingkungan
+
+- Produksi memakai HTTPS dan daftar izinkan CORS di API untuk origin web / Vercel Anda.
+- Citra peta diproksi melalui backend — bundel peramban tidak menyematkan kunci API peta pihak ketiga.
+- Utamakan dasbor resmi untuk operasi harian; gunakan [referensi API](/id/api) hanya untuk integrasi.
+
+<Tip>
+Jika login Keycloak berhasil tetapi ruang kerja kosong, periksa keanggotaan org dan penugasan hub dengan admin — lihat [Pemecahan masalah](/id/guides/troubleshooting).
+</Tip>

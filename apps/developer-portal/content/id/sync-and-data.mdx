@@ -1,0 +1,45 @@
+---
+title: Sinkronisasi dan data
+description: Bagaimana peristiwa lapangan direkonsiliasi dengan server — tanda terima berdasarkan id peristiwa.
+order: 6
+---
+
+Altius memperlakukan perangkat seluler sebagai **produsen peristiwa yang mampu offline** dan API sebagai **sistem catatan** untuk pekerjaan yang diterima.
+
+## Outbox peristiwa
+
+Pengemudi menghasilkan peristiwa (perubahan status, sampel GPS, pengiriman formulir, dan sejenisnya). Aplikasi menyimpannya di outbox lokal dan mengunggah batch saat online.
+
+Bentuk tipikal untuk integrator:
+
+```http
+POST /api/v3/events
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+[ { …peristiwa perangkat… }, … ]
+```
+
+Respons mencakup **satu tanda terima per peristiwa**. Cocokkan setiap tanda terima memakai `event_id` / `server_event_id` — **jangan** berdasarkan indeks array.
+
+## Mengapa pencocokan id penting
+
+Jaringan dapat mengubah urutan dan percobaan ulang dapat menduplikasi. Pencocokan berbasis indeks dapat menandai peristiwa yang salah sebagai diterima dan meninggalkan yang lain macet. Selalu kunci berdasarkan id yang dikembalikan API.
+
+## Penyegaran tugas
+
+Setelah mengunggah peristiwa, klien menyegarkan status papan (misalnya `GET /api/v3/tasks`) agar UI lokal sesuai kebenaran server.
+
+## Isolasi penyewa
+
+Org dan hub untuk penulisan berasal dari keanggotaan subjek token yang terautentikasi. Jangan mempercayai bidang tenant yang diklaim klien untuk otorisasi.
+
+## Lokasi data (ringkas)
+
+| Lokasi | Isi (tingkat tinggi) |
+|---|---|
+| Basis data API | Tugas, keanggotaan, peristiwa diterima, laporan |
+| SQLite seluler | Working set + outbox hingga sync / aturan retensi berlaku |
+| Penyimpanan aman | Token OAuth di perangkat |
+
+Lihat [Keamanan](/id/guides/security) untuk TLS dan kontak kerentanan.

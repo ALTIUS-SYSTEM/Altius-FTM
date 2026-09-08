@@ -1,6 +1,7 @@
 packages:
   - apps/web
   - apps/landing
+  - apps/developer-portal
   - packages/*
 minimumReleaseAge: 10080
 # Supply-chain hardening (pnpm ≥ 10.21 / 10.26).

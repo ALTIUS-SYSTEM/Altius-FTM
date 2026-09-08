@@ -10,6 +10,7 @@ Product monorepo for Altius FTM: driver mobile app, operations dashboard, market
 
 | Document | Description |
 |---|---|
+| [Developer portal](./apps/developer-portal) | Public EN/ID guides + Scalar OpenAPI (`pnpm dev:portal` → http://127.0.0.1:3200) |
 | [ALTIUS_BACKEND_ARCHITECTURE.md](./Docs/ALTIUS_BACKEND_ARCHITECTURE.md) | API topology: Keycloak, Postgres, Maps, agent, deploy |
 | [ALTIUS_DATABASE_DESIGN.md](./Docs/ALTIUS_DATABASE_DESIGN.md) | PostgreSQL schema & invariants |
 | [ALTIUS_ARCHITECTURE.md](./Docs/ALTIUS_ARCHITECTURE.md) | End-to-end system architecture |
@@ -29,6 +30,7 @@ Product monorepo for Altius FTM: driver mobile app, operations dashboard, market
 | `apps/mobile` | Flutter driver app — offline-first SQLite, event outbox, Keycloak PKCE, sync |
 | `apps/web` | Next.js 15 operations workspace (admin / supervisor / lead) |
 | `apps/landing` | Next.js 15 marketing site |
+| `apps/developer-portal` | Next.js 15 public docs + Scalar API reference |
 | `packages/api-contracts` | Zod REST/JSON DTOs |
 | `packages/algos` | Routing, geofence, GPS comparison, ETA |
 | `packages/i18n` | Locales: en, id, th, ja, zh, fil-PH, vi |
@@ -43,6 +45,7 @@ docker compose up -d          # Keycloak, Postgres, API, Caddy (optional)
 pnpm install
 cp apps/web/.env.example apps/web/.env.local
 pnpm dev:web                  # http://localhost:3000
+pnpm dev:portal               # http://127.0.0.1:3200
 
 cd apps/mobile && flutter pub get
 flutter run -t lib/main_dev.dart

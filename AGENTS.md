@@ -32,6 +32,7 @@ docker compose up -d
 - Web dashboard: http://localhost:3000
 - Landing (compose): http://localhost:3001
 - Landing (`pnpm --filter @altius/landing dev`): http://127.0.0.1:3100
+- Developer portal (`pnpm dev:portal`): http://127.0.0.1:3200
 
 ## Auth E2E (local)
 

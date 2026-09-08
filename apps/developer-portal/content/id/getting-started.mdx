@@ -1,0 +1,57 @@
+---
+title: Mulai cepat
+description: Prasyarat jaringan, admin pertama, buka web, instal aplikasi seluler.
+order: 2
+---
+
+## Sebelum mulai
+
+Lingkungan Altius Anda biasanya mencakup:
+
+- URL **dasbor web** (ruang kerja operasi)
+- URL dasar **API** (HTTPS di produksi)
+- **Penyedia identitas** (realm Keycloak) untuk web dan seluler
+- Build toko atau paket instalasi untuk **aplikasi lapangan pengemudi**
+
+Konfirmasikan dengan kontak Altius URL dan realm mana yang berlaku untuk organisasi Anda.
+
+## Prasyarat jaringan
+
+Izinkan HTTPS (dan WSS jika dipakai) dari peramban staf dan perangkat pengemudi ke:
+
+- Origin dasbor web
+- Host API
+- Host Keycloak / IdP
+
+Proksi perusahaan tidak boleh menghapus header `Authorization` pada panggilan API.
+
+## Administrator pertama
+
+1. Terima undangan admin atau pengguna realm dari operator Altius.
+2. Buka dasbor web dan masuk (OIDC melalui Keycloak).
+3. Pastikan **organisasi** dan **hub** default muncul setelah login.
+4. Undang supervisor dan pengemudi sesuai model peran — lihat [Identitas & akses](/id/guides/identity-and-access).
+
+## Membuka dasbor web
+
+Staf memakai ruang kerja peramban untuk dispatch, pemantauan, dan laporan. Simpan bookmark URL dari operator Anda. Dari portal ini, **Buka dasbor** mengarah ke origin login web yang dikonfigurasi.
+
+## Menginstal aplikasi seluler
+
+1. Instal build Altius Field untuk lingkungan Anda (toko atau distribusi enterprise).
+2. Saat pertama diluncurkan, masuk dengan akun pengemudi (PKCE terhadap Keycloak).
+3. Setujui izin lokasi / notifikasi yang diperlukan untuk pelacakan lapangan.
+4. Pastikan perangkat dapat menjangkau API setelah login.
+
+<Warning>
+OAuth seluler memakai URI pengalihan privat (`com.altius.altius_field:/oauthredirect`). Jangan mengganti skema kustom tanpa berkoordinasi dengan Altius — pengalihan yang salah mencegah masuk.
+</Warning>
+
+## Daftar periksa asap
+
+| Pemeriksaan | Diharapkan |
+|---|---|
+| Login web | Masuk ke ruang kerja dengan konteks org |
+| Buat tugas uji | Terlihat oleh pengemudi setelah sync |
+| Mode offline seluler | Antrian lokal bertambah; sync membersihkan setelah reconnect |
+| Kesehatan API (ops) | `GET /api/v3/health` mengembalikan OK (probe tanpa autentikasi) |
