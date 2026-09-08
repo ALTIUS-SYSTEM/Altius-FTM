@@ -144,8 +144,15 @@ impl MceasyClient {
         view_id: &str,
         vehicle_ids: &[&str],
     ) -> Result<Vec<MceasyPosition>, ApiError> {
-        let ids = vehicle_ids.join(",");
-        let path = format!("/live-data/temp_live_view?viewId={view_id}&vehicleIds={ids}");
+        let ids = vehicle_ids
+            .iter()
+            .map(|id| pct_encode(id).into_owned())
+            .collect::<Vec<_>>()
+            .join(",");
+        let path = format!(
+            "/live-data/temp_live_view?viewId={}&vehicleIds={ids}",
+            pct_encode(view_id)
+        );
         self.get(&path).await
     }
 
@@ -164,7 +171,8 @@ impl MceasyClient {
         let start = NaiveDate::from(start.naive_utc());
         let end = NaiveDate::from(end.naive_utc());
         let path = format!(
-            "/report/offline-history?vehicle_id={vehicle_id}&start_date={start}&end_date={end}"
+            "/report/offline-history?vehicle_id={}&start_date={start}&end_date={end}",
+            pct_encode(vehicle_id)
         );
         self.get(&path).await
     }

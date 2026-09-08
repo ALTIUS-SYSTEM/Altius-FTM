@@ -137,10 +137,19 @@ impl std::fmt::Debug for Config {
             .field("store_backend", &self.store_backend)
             .field("database_url", &"<redacted>")
             .field("typedb_database", &self.typedb_database)
-            .field("google_maps_api_key", &self.google_maps_api_key.as_ref().map(|_| "<redacted>"))
+            .field(
+                "google_maps_api_key",
+                &self.google_maps_api_key.as_ref().map(|_| "<redacted>"),
+            )
             .field("google_route_mode", &self.google_route_mode)
-            .field("agent_state_secret", &self.agent_state_secret.as_ref().map(|_| "<redacted>"))
-            .field("openrouter_api_key", &self.openrouter_api_key.as_ref().map(|_| "<redacted>"))
+            .field(
+                "agent_state_secret",
+                &self.agent_state_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "openrouter_api_key",
+                &self.openrouter_api_key.as_ref().map(|_| "<redacted>"),
+            )
             .field("openrouter_model", &self.openrouter_model)
             .field("cors_origins", &self.cors_origins)
             .field("allow_password_grant", &self.allow_password_grant)

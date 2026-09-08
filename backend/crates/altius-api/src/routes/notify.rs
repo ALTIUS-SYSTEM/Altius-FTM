@@ -84,6 +84,21 @@ async fn send_push(
             "to_subject, title and body are required".into(),
         ));
     }
+    // Cross-tenant guard: a staff member may only push to a driver in their
+    // own organization. Without this, knowing a subject lets you reach any
+    // tenant's devices.
+    let org = super::org_of(&s, &principal.subject).await?;
+    if !store(&s)?
+        .user_in_org(&org, req.to_subject.trim())
+        .await
+        .map_err(ApiError::Internal)?
+    {
+        // Match the existing "no tokens" wording so the 404 does not leak
+        // whether the subject exists in another tenant.
+        return Err(ApiError::Unavailable(
+            "driver has no registered push tokens".into(),
+        ));
+    }
     let tokens = store(&s)?
         .push_tokens_for_user(&req.to_subject)
         .await
