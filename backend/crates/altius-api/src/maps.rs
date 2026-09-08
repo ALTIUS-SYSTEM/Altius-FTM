@@ -178,13 +178,13 @@ impl MapsClient {
                 .query(query)
                 .send()
                 .await
-                .map_err(|e| ApiError::Unavailable(format!("maps: {e}")))?;
+                .map_err(|e| ApiError::upstream("maps", e))?;
             let status = res.status();
             if status.is_success() {
                 return res
                     .json()
                     .await
-                    .map_err(|e| ApiError::Unavailable(format!("maps parse: {e}")));
+                    .map_err(|e| ApiError::upstream("maps", e));
             }
             let retriable = status.as_u16() == 429 || status.is_server_error();
             if !retriable || attempt + 1 == MAX_ATTEMPTS {

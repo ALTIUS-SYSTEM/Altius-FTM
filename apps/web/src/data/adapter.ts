@@ -38,7 +38,10 @@ export const validateTask = (task: DemoTask) => {
 };
 export const csvCell = (value: unknown): string => {
   const text = String(value ?? "");
-  return `"${(/^[=+@\-\t\r]/.test(text) ? `'${text}` : text).replaceAll('"', '""')}"`;
+  // Leading whitespace/control characters are trimmed by importers, so " =1+1"
+  // is still a formula. Neutralize with a leading single quote on risky cells.
+  const risky = /^[\s\x00-\x1f]*[=+@\-\t\r]/.test(text);
+  return `"${(risky ? `'${text}` : text).replaceAll('"', '""')}"`;
 };
 export const tasksCsv = (tasks: readonly DemoTask[]) => [
   ["ID", "Title", "Address", "Hub", "Status", "Driver", "Date"].map(csvCell).join(","),

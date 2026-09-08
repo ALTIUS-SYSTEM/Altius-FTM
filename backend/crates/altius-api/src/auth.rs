@@ -60,10 +60,10 @@ impl Jwks {
             .get(self.config.jwks_url())
             .send()
             .await
-            .map_err(|e| ApiError::Unavailable(format!("jwks fetch: {e}")))?
+            .map_err(|e| ApiError::upstream("identity provider", e))?
             .json()
             .await
-            .map_err(|e| ApiError::Unavailable(format!("jwks parse: {e}")))?;
+            .map_err(|e| ApiError::upstream("identity provider", e))?;
         let mut guard = self.inner.write().await;
         guard.keys = set;
         guard.fetched_at = Instant::now();
@@ -99,6 +99,10 @@ impl Jwks {
         validation.set_issuer(&[&self.config.issuer]);
         validation.set_audience(&[&self.config.audience]);
         validation.validate_exp = true;
+        // jsonwebtoken defaults validate_nbf to false, so a post-dated token
+        // would be accepted the moment it is minted.
+        validation.validate_nbf = true;
+        validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
 
         let data = decode::<Claims>(token, &key, &validation)
             .map_err(|_| ApiError::Unauthorized)?;

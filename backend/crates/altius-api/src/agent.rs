@@ -199,10 +199,10 @@ async fn drive(
             .json(&body)
             .send()
             .await
-            .map_err(|e| ApiError::Unavailable(format!("openrouter: {e}")))?
+            .map_err(|e| ApiError::upstream("openrouter", e))?
             .json()
             .await
-            .map_err(|e| ApiError::Unavailable(format!("openrouter parse: {e}")))?;
+            .map_err(|e| ApiError::upstream("openrouter", e))?;
 
         let msg = res
             .choices

@@ -149,7 +149,7 @@ async fn exchange_tokens(
         .form(params)
         .send()
         .await
-        .map_err(|e| ApiError::Unavailable(format!("idp unreachable: {e}")))?;
+        .map_err(|e| ApiError::upstream("identity provider", e))?;
     if resp.status().is_client_error() {
         return Err(ApiError::Unauthorized);
     }
@@ -175,14 +175,17 @@ fn store(s: &Arc<AppState>) -> ApiResult<&crate::store::Store> {
         .ok_or_else(|| ApiError::Unavailable("persistence not configured".into()))
 }
 
-/// Resolve the caller's org — TypeDB membership first, token claim as
-/// fallback for tenants not yet synced.
-async fn org_of(s: &Arc<AppState>, subject: &str, claim: Option<&String>) -> ApiResult<String> {
+/// Resolve the caller's org from TypeDB membership only.
+///
+/// The `organization_id` token claim is deliberately NOT trusted as a fallback:
+/// it is a Keycloak user attribute, and if it is self-editable (or minted by
+/// another client in the same realm) it becomes a tenant selector the caller
+/// controls. A subject with no membership row is forbidden, not free to pick.
+async fn org_of(s: &Arc<AppState>, subject: &str) -> ApiResult<String> {
     store(s)?
         .organization_of(subject)
         .await
         .map_err(ApiError::Internal)?
-        .or_else(|| claim.cloned())
         .ok_or(ApiError::Forbidden)
 }
 
@@ -190,7 +193,7 @@ async fn list_tasks(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
 ) -> ApiResult<Json<Value>> {
-    let org = org_of(&s, &principal.subject, principal.organization_id.as_ref()).await?;
+    let org = org_of(&s, &principal.subject).await?;
     let tasks = store(&s)?
         .tasks_for_org(&org)
         .await
@@ -206,7 +209,7 @@ async fn get_task(
     principal: AuthUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let org = org_of(&s, &principal.subject, principal.organization_id.as_ref()).await?;
+    let org = org_of(&s, &principal.subject).await?;
     store(&s)?
         .task_by_id(&org, &id)
         .await
@@ -223,8 +226,9 @@ async fn create_task(
     if principal.has_role(Role::Driver) {
         return Err(ApiError::Forbidden);
     }
+    let org = org_of(&s, &principal.subject).await?;
     store(&s)?
-        .create_task(&task)
+        .create_task(&org, &task)
         .await
         .map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": { "taskId": task.id } })))
@@ -254,7 +258,7 @@ async fn sync_events(
     let st = store(&s)?;
     let mut receipts = Vec::with_capacity(events.len());
     for ev in &events {
-        receipts.push(st.record_event(ev).await.map_err(ApiError::Internal)?);
+        receipts.push(st.record_event(&scope.0, &principal.subject, ev).await.map_err(ApiError::Internal)?);
     }
     Ok(Json(json!({ "data": receipts })))
 }
@@ -318,7 +322,7 @@ async fn list_users(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
 ) -> ApiResult<Json<Value>> {
-    let org = org_of(&s, &principal.subject, principal.organization_id.as_ref()).await?;
+    let org = org_of(&s, &principal.subject).await?;
     let users = store(&s)?.users_for_org(&org).await.map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": users, "meta": { "organization": org } })))
 }
@@ -327,7 +331,7 @@ async fn list_hubs(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
 ) -> ApiResult<Json<Value>> {
-    let org = org_of(&s, &principal.subject, principal.organization_id.as_ref()).await?;
+    let org = org_of(&s, &principal.subject).await?;
     let hubs = store(&s)?.hubs_for_org(&org).await.map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": hubs, "meta": { "organization": org } })))
 }
@@ -336,7 +340,7 @@ async fn list_drivers(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
 ) -> ApiResult<Json<Value>> {
-    let org = org_of(&s, &principal.subject, principal.organization_id.as_ref()).await?;
+    let org = org_of(&s, &principal.subject).await?;
     let drivers = store(&s)?.drivers_for_org(&org).await.map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": drivers, "meta": { "organization": org } })))
 }

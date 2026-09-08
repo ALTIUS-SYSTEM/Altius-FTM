@@ -20,8 +20,40 @@ impl Store {
         Self { driver, database }
     }
 
+    /// Escape a value for embedding in a double-quoted TypeQL string literal.
+    /// Backslash and quote are escaped; C0 control characters are escaped or
+    /// dropped so they can never terminate the literal and let `;`/`#` in the
+    /// remainder be parsed as query syntax.
     fn esc(s: &str) -> String {
-        s.replace('\\', "\\\\").replace('"', "\\\"")
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                // Remaining C0 + DEL have no escape form and no legitimate use
+                // in these fields; drop them rather than emit a raw byte.
+                c if c.is_control() => {}
+                c => out.push(c),
+            }
+        }
+        out
+    }
+
+    /// Namespace a client-chosen idempotency key by tenant and driver so one
+    /// caller cannot burn (and thereby silently suppress) another caller's key.
+    /// `request-key` is `@unique` globally in the schema.
+    /// Length-prefixed so the parts cannot be re-partitioned: org "a"/driver
+    /// "bc" and org "ab"/driver "c" must not collide. A control-character
+    /// separator would not survive `esc`, which strips C0.
+    fn request_key(org: &str, driver_sub: &str, key: &str) -> String {
+        format!(
+            "{}:{org}|{}:{driver_sub}|{key}",
+            org.len(),
+            driver_sub.len()
+        )
     }
 
     async fn fetch_all(&self, query: &str) -> anyhow::Result<Vec<Value>> {
@@ -99,12 +131,37 @@ impl Store {
     }
 
     /// Upsert org → hub → task → stops in one write transaction.
-    pub async fn create_task(&self, task: &Task) -> anyhow::Result<()> {
+    ///
+    /// `org` is the caller's server-resolved organization, never a body field:
+    /// the hub must be allocated to it, so a task can only ever land in a hub
+    /// the authenticated caller's tenant owns.
+    pub async fn create_task(&self, org: &str, task: &Task) -> anyhow::Result<()> {
         let tx = self
             .driver
             .transaction(&self.database, TransactionType::Write)
             .await
             .context("open write tx")?;
+
+        // Confirm the hub is allocated to the caller's org before inserting.
+        // Without this an empty `match` would make the `insert` a silent no-op
+        // that still reports success to the client.
+        let scope = format!(
+            r#"match
+                $o isa organization, has org-id "{org}";
+                $h isa hub, has hub-id "{hub}";
+                allocation (org: $o, hub: $h);
+            select $h;"#,
+            org = Self::esc(org),
+            hub = Self::esc(&task.hub_id),
+        );
+        let allocated = match tx.query(&scope).await.context("verify hub allocation")? {
+            QueryAnswer::ConceptRowStream(_, mut rows) => rows.next().await.is_some(),
+            _ => false,
+        };
+        if !allocated {
+            tx.rollback().await.ok();
+            anyhow::bail!("hub {} is not allocated to organization {org}", task.hub_id);
+        }
 
         let stage = serde_json::to_value(task.status)?
             .as_str()
@@ -114,6 +171,7 @@ impl Store {
             r#"match
                 $o isa organization, has org-id "{org}";
                 $h isa hub, has hub-id "{hub}";
+                allocation (org: $o, hub: $h);
             insert
                 $t isa task,
                     has task-id "{tid}",
@@ -121,7 +179,7 @@ impl Store {
                     has stage "{stage}",
                     has day "{day}";
                 located (task: $t, hub: $h);"#,
-            org = Self::esc(&task.tenant_id),
+            org = Self::esc(org),
             hub = Self::esc(&task.hub_id),
             tid = Self::esc(&task.id),
             title = Self::esc(&task.title),
@@ -167,40 +225,70 @@ impl Store {
     /// to the task (`recorded`) and stop (`reports`), then advance the stop
     /// and task stages — all in one write transaction.
     /// Replayed request keys short-circuit to `Accepted` without re-writing.
-    pub async fn record_event(&self, ev: &DeviceEvent) -> anyhow::Result<EventReceipt> {
+    ///
+    /// `org` and `driver_sub` are server-resolved from the caller's token. Every
+    /// task and stop lookup is constrained by `org`, so a client cannot reach
+    /// another tenant's rows by supplying their ids; the idempotency key is
+    /// namespaced by both, so one tenant cannot burn another tenant's keys.
+    pub async fn record_event(
+        &self,
+        org: &str,
+        driver_sub: &str,
+        ev: &DeviceEvent,
+    ) -> anyhow::Result<EventReceipt> {
         let tx = self
             .driver
             .transaction(&self.database, TransactionType::Write)
             .await
             .context("open write tx")?;
 
+        let request_key = Self::request_key(org, driver_sub, &ev.idempotency_key);
         let check = format!(
-            r#"match $e isa device-event, has request-key "{}"; select $e;"#,
-            Self::esc(&ev.idempotency_key)
+            r#"match $e isa device-event, has request-key "{}", has event-id $eid;
+            fetch {{ "event": $eid }};"#,
+            Self::esc(&request_key)
         );
-        if let QueryAnswer::ConceptRowStream(_, mut rows) =
+        if let QueryAnswer::ConceptDocumentStream(_, mut docs) =
             tx.query(&check).await.context("idempotency check")?
-            && let Some(row) = rows.next().await
+            && let Some(doc) = docs.next().await
         {
-            row?;
+            let v = serde_json::to_value(doc?.into_json())?;
             tx.rollback().await.ok();
+            // Return the *stored* event id, not the client's key, so both the
+            // replay and the fresh path yield the same server-side identifier.
             return Ok(EventReceipt::Accepted {
-                server_event_id: ev.idempotency_key.clone(),
+                server_event_id: v
+                    .get("event")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or(&ev.event_id)
+                    .to_string(),
             });
         }
 
-        // Read current stop stage to enforce the transition rules.
+        // Read current stop stage to enforce the transition rules. The stop must
+        // hang off a task located in a hub allocated to the caller's org.
         let mut new_stage: Option<StopStatus> = None;
         if let Some(stop_id) = &ev.stop_id {
             let stage_q = format!(
-                r#"match $s isa stop, has stop-id "{}", has stage $st; fetch {{ "stage": $st }};"#,
-                Self::esc(stop_id)
+                r#"match
+                    $o isa organization, has org-id "{org}";
+                    allocation (org: $o, hub: $h);
+                    located (task: $t, hub: $h);
+                    $t has task-id "{tid}";
+                    contains (parent: $t, child: $s);
+                    $s isa stop, has stop-id "{sid}", has stage $st;
+                fetch {{ "stage": $st }};"#,
+                org = Self::esc(org),
+                tid = Self::esc(&ev.task_id),
+                sid = Self::esc(stop_id),
             );
+            let mut resolved = false;
             if let QueryAnswer::ConceptDocumentStream(_, mut docs) =
                 tx.query(&stage_q).await.context("read stop stage")?
                 && let Some(doc) = docs.next().await {
                     let v = serde_json::to_value(doc?.into_json())?;
                     if let Some(cur) = v.get("stage").and_then(|s| s.as_str()) {
+                        resolved = true;
                         let Ok(from) = serde_json::from_str::<StopStatus>(
                             &format!("\"{cur}\""),
                         ) else {
@@ -220,6 +308,15 @@ impl Store {
                         }
                     }
                 }
+            // No match means the stop does not exist, does not belong to this
+            // task, or the task is outside the caller's org. Reject rather than
+            // silently recording an event that advances nothing.
+            if !resolved {
+                tx.rollback().await.ok();
+                return Ok(EventReceipt::Conflict {
+                    reason: format!("stop {stop_id} is not part of task {} in this organization", ev.task_id),
+                });
+            }
         }
 
         let insert = format!(
@@ -232,11 +329,15 @@ impl Store {
                 has day "{day}",
                 has payload {payload};
             match
-                $t isa task, has task-id "{tid}";
+                $o isa organization, has org-id "{org}";
+                allocation (org: $o, hub: $h);
+                located (task: $t, hub: $h);
+                $t has task-id "{tid}";
             insert
                 recorded (event: $e, task: $t);"#,
             id = Self::esc(&ev.event_id),
-            key = Self::esc(&ev.idempotency_key),
+            key = Self::esc(&request_key),
+            org = Self::esc(org),
             action = Self::esc(&format!("{:?}", ev.action).to_lowercase()),
             utc = ev.time.utc.format("%Y-%m-%dT%H:%M:%S%.3f+00:00"),
             off = ev.time.offset_minutes,
@@ -255,12 +356,19 @@ impl Store {
             let link = format!(
                 r#"match
                     $e isa device-event, has event-id "{eid}";
+                    $o isa organization, has org-id "{org}";
+                    allocation (org: $o, hub: $h);
+                    located (task: $t, hub: $h);
+                    $t has task-id "{tid}";
+                    contains (parent: $t, child: $s);
                     $s isa stop, has stop-id "{sid}", has stage $old;
                 delete has $old of $s;
                 insert
                     $s has stage "{stage}";
                     reports (stop: $s, event: $e);"#,
                 eid = Self::esc(&ev.event_id),
+                org = Self::esc(org),
+                tid = Self::esc(&ev.task_id),
                 sid = Self::esc(stop_id),
                 stage = Self::esc(&stage_name),
             );
@@ -271,15 +379,32 @@ impl Store {
         if matches!(new_stage, Some(StopStatus::Departed)) {
             let roll = format!(
                 r#"match
-                    $t isa task, has task-id "{tid}", has stage $old;
+                    $o isa organization, has org-id "{org}";
+                    allocation (org: $o, hub: $h);
+                    located (task: $t, hub: $h);
+                    $t has task-id "{tid}", has stage $old;
                 delete has $old of $t;
                 insert $t has stage "in_progress";"#,
+                org = Self::esc(org),
                 tid = Self::esc(&ev.task_id),
             );
             tx.query(&roll).await.context("advance task stage")?;
         }
 
-        tx.commit().await.context("commit")?;
+        // The check-then-insert above is not atomic across concurrent
+        // transactions; `request-key @unique` is the real guard and only fires
+        // here. A uniqueness violation means someone else committed the same
+        // key first — which is exactly the replay this endpoint promises to
+        // absorb, so report it as accepted rather than 500-ing the whole batch.
+        if let Err(e) = tx.commit().await {
+            let text = e.to_string();
+            if text.contains("request-key") || text.to_lowercase().contains("unique") {
+                return Ok(EventReceipt::Accepted {
+                    server_event_id: ev.event_id.clone(),
+                });
+            }
+            return Err(anyhow::Error::new(e).context("commit"));
+        }
         Ok(EventReceipt::Accepted {
             server_event_id: ev.event_id.clone(),
         })

@@ -40,4 +40,19 @@ impl IntoResponse for ApiError {
     }
 }
 
+impl ApiError {
+    /// An upstream dependency failed. Logs the real error server-side and
+    /// returns a fixed, client-safe message.
+    ///
+    /// Never format an upstream transport error into a client-visible string
+    /// directly: `reqwest::Error`'s `Display` embeds the full request URL, and
+    /// our outbound URLs carry credentials in the query string (the Google
+    /// Maps `key` parameter), so `format!("{e}")` hands the API key to whoever
+    /// triggered the failure.
+    pub fn upstream(what: &'static str, e: impl std::fmt::Display) -> Self {
+        tracing::error!(upstream = what, error = %e, "upstream request failed");
+        Self::Unavailable(format!("{what} unavailable"))
+    }
+}
+
 pub type ApiResult<T> = Result<T, ApiError>;

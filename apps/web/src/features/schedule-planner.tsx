@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useDemo } from "@/components/demo-provider";
 import { Badge, Card, Icon, Table } from "@/components/ui";
 import { DEMO_DATE, DRIVERS } from "@/data/model";
-import { downloadText } from "@/data/adapter";
+import { csvCell, downloadText } from "@/data/adapter";
 
 interface PlanRow {
   id: string;
@@ -133,9 +133,13 @@ export function Schedule() {
     "Catatan",
   ];
 
+  // Every cell goes through csvCell: customer/destination/notes carry
+  // backend-supplied text, so an unquoted join lets a task title inject
+  // spreadsheet formulas or forge extra rows with an embedded comma/newline.
   const csv = () => {
-    const lines = filtered.map((r) =>
-      [
+    const rows = [
+      ["Date", "Activity", "Customer", "Fleet", "Staff", "Origin", "Destination", "Quantity", "Notes"],
+      ...filtered.map((r) => [
         r.date,
         r.activity,
         r.customer,
@@ -145,9 +149,9 @@ export function Schedule() {
         r.destination,
         r.quantity,
         r.notes,
-      ].join(","),
-    );
-    return ["Date,Activity,Customer,Fleet,Staff,Origin,Destination,Quantity,Notes", ...lines].join("\n");
+      ]),
+    ];
+    return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
   };
 
   return (
