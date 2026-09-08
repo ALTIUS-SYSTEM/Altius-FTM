@@ -143,6 +143,7 @@
       "publicClient": true,
       "secret": "",
       "redirectUris": [
+        "http://localhost",
         "com.altius.altiusfield:/oauthredirect"
       ],
       "webOrigins": [
@@ -153,7 +154,8 @@
       "directAccessGrantsEnabled": false,
       "fullScopeAllowed": true,
       "attributes": {
-        "pkce.code.challenge.method": "S256"
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
       },
       "protocol": "openid-connect",
       "protocolMappers": [

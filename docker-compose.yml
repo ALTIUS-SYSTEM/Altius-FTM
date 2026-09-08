@@ -98,6 +98,10 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+    # localhost-only on 5433: a Homebrew postgres already owns 127.0.0.1:5432,
+    # so host-run processes (cargo run, psql) reach compose Postgres here.
+    ports:
+      - "127.0.0.1:5433:5432"
 
   api:
     build:

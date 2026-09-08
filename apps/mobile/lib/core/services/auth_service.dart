@@ -58,6 +58,8 @@ class AuthService {
         discoveryUrl: '$issuer/.well-known/openid-configuration',
         scopes: ['openid', 'profile', 'email'],
         promptValues: ['login'],
+        // AppAuth refuses plain http; only loopback dev issuers may use it.
+        allowInsecureConnections: _isInsecureDevIssuer(issuer),
       ),
     );
 
@@ -95,6 +97,7 @@ class AuthService {
         refreshToken: refreshToken,
         grantType: 'refresh_token',
         scopes: ['openid', 'profile', 'email'],
+        allowInsecureConnections: _isInsecureDevIssuer(issuer),
       ),
     );
 
@@ -164,6 +167,15 @@ class AuthService {
 
   /// Whether a Keycloak session flag is active.
   Future<bool> isSignedIn() async => await _secure.read(key: 'session') == 'true';
+
+  /// AppAuth refuses plain http; allow it only for loopback dev issuers
+  /// (local docker-compose Keycloak). A remote http issuer still throws.
+  static bool _isInsecureDevIssuer(String issuer) {
+    final uri = Uri.tryParse(issuer.trim());
+    if (uri == null || uri.scheme != 'http') return false;
+    final h = uri.host.toLowerCase();
+    return h == 'localhost' || h == '127.0.0.1' || h == '::1' || h == '[::1]';
+  }
 
   /// Clear all stored tokens (keeps IdP/API config for the next sign-in).
   Future<void> logout() async {
