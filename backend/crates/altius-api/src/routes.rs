@@ -32,6 +32,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v3/users", get(list_users))
         .route("/api/v3/hubs", get(list_hubs))
         .route("/api/v3/drivers", get(list_drivers))
+        .route("/api/v3/costs", post(record_cost).get(list_costs))
+        .route("/api/v3/reports", post(record_report).get(list_reports))
         .route("/api/v3/agent/dispatch-suggestion", post(dispatch_suggestion))
         .route("/api/v3/agent/resume", post(agent_resume))
 }
@@ -337,6 +339,53 @@ async fn list_drivers(
     let org = org_of(&s, &principal.subject, principal.organization_id.as_ref()).await?;
     let drivers = store(&s)?.drivers_for_org(&org).await.map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": drivers, "meta": { "organization": org } })))
+}
+
+async fn record_cost(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+    Json(req): Json<altius_core::CostEntry>,
+) -> ApiResult<Json<Value>> {
+    store(&s)?
+        .record_cost(&req, &principal.subject)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(json!({ "data": { "id": req.id } })))
+}
+
+async fn list_costs(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+) -> ApiResult<Json<Value>> {
+    let day = None::<&str>;
+    let costs = store(&s)?
+        .costs_for_driver(&principal.subject, day)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(json!({ "data": costs })))
+}
+
+async fn record_report(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+    Json(req): Json<altius_core::DailyReport>,
+) -> ApiResult<Json<Value>> {
+    store(&s)?
+        .record_daily_report(&req, &principal.subject)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(json!({ "data": { "day": req.day } })))
+}
+
+async fn list_reports(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+) -> ApiResult<Json<Value>> {
+    let reports = store(&s)?
+        .reports_for_driver(&principal.subject)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(json!({ "data": reports })))
 }
 
 fn dispatch_tools(state: &Arc<AppState>) -> Vec<agent::Tool> {

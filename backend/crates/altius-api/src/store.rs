@@ -404,4 +404,87 @@ impl Store {
         );
         self.fetch_all(&q).await
     }
+
+    /// Insert a driver expense entry.
+    pub async fn record_cost(&self, entry: &altius_core::CostEntry, driver_sub: &str) -> anyhow::Result<()> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for cost")?;
+        let q = format!(
+            r#"insert
+                $e isa cost-entry,
+                    has event-id "{id}",
+                    has category "{category}",
+                    has amount-minor {amount},
+                    has currency "{currency}",
+                    has note "{note}",
+                    has day "{day}",
+                    has user-sub "{driver}";"#,
+            id = Self::esc(&entry.id),
+            category = Self::esc(&format!("{:?}", entry.category).to_lowercase()),
+            amount = entry.amount_minor,
+            currency = Self::esc(&entry.currency),
+            note = Self::esc(&entry.note),
+            day = Self::esc(&entry.day),
+            driver = Self::esc(driver_sub),
+        );
+        tx.query(&q).await.context("insert cost")?;
+        tx.commit().await.context("commit cost")?;
+        Ok(())
+    }
+
+    /// List cost entries for a driver, optionally filtered to a day.
+    pub async fn costs_for_driver(&self, driver_sub: &str, day: Option<&str>) -> anyhow::Result<Vec<Value>> {
+        let day_filter = day.map_or(String::new(), |d| format!(r#", has day "{}""#, Self::esc(d)));
+        let q = format!(
+            r#"match
+                $e isa cost-entry, has user-sub "{driver}" {day_filter};
+            fetch {{ "entry": {{ $e.* }} }};"#,
+            driver = Self::esc(driver_sub),
+        );
+        self.fetch_all(&q).await
+    }
+
+    /// Insert a daily LHS report.
+    pub async fn record_daily_report(&self, report: &altius_core::DailyReport, driver_sub: &str) -> anyhow::Result<()> {
+        let tx = self
+            .driver
+            .transaction(&self.database, TransactionType::Write)
+            .await
+            .context("open write tx for report")?;
+        let payload = serde_json::to_string(report)?;
+        let q = format!(
+            r#"match
+                $d isa user, has user-sub "{driver}";
+            insert
+                $r isa daily-report,
+                    has day "{day}",
+                    has report-status "{status}",
+                    has revision {revision},
+                    has payload "{payload}";
+                submitted (driver: $d, report: $r);"#,
+            driver = Self::esc(driver_sub),
+            day = Self::esc(&report.day),
+            status = Self::esc(&format!("{:?}", report.status).to_lowercase()),
+            revision = report.revision,
+            payload = Self::esc(&payload),
+        );
+        tx.query(&q).await.context("insert report")?;
+        tx.commit().await.context("commit report")?;
+        Ok(())
+    }
+
+    /// List daily reports submitted by a driver.
+    pub async fn reports_for_driver(&self, driver_sub: &str) -> anyhow::Result<Vec<Value>> {
+        let q = format!(
+            r#"match
+                $d isa user, has user-sub "{driver}";
+                submitted (driver: $d, report: $r);
+            fetch {{ "report": {{ $r.* }} }};"#,
+            driver = Self::esc(driver_sub)
+        );
+        self.fetch_all(&q).await
+    }
 }

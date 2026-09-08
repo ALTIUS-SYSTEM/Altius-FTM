@@ -78,7 +78,8 @@ entity cost-entry
     owns amount-minor,
     owns currency,
     owns note,
-    owns day;
+    owns day,
+    owns user-sub;
 
 entity daily-report
     owns day,
