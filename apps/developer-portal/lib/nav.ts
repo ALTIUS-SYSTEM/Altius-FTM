@@ -31,7 +31,10 @@ type NavLabels = Record<GuideSlug, string> & {
   changelog: string;
   home: string;
   openDashboard: string;
+  /** Full product + docs brand for standalone chrome (home, etc.). */
   productLabel: string;
+  /** Short suffix beside the Altius-FTM wordmark in the header. */
+  productShortLabel: string;
 };
 
 const NAV_EN: NavLabels = {
@@ -41,6 +44,7 @@ const NAV_EN: NavLabels = {
   changelog: "Changelog",
   openDashboard: "Open dashboard",
   productLabel: "Altius-FTM Docs",
+  productShortLabel: "Docs",
   overview: "Overview",
   "getting-started": "Getting started",
   "identity-and-access": "Identity & access",
@@ -59,6 +63,7 @@ const NAV_ID: NavLabels = {
   changelog: "Catatan rilis",
   openDashboard: "Buka dasbor",
   productLabel: "Dokumen Altius-FTM",
+  productShortLabel: "Dokumen",
   overview: "Ringkasan",
   "getting-started": "Mulai cepat",
   "identity-and-access": "Identitas & akses",

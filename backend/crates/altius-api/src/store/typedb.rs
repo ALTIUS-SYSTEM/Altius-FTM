@@ -1110,6 +1110,8 @@ impl TypedbStore {
     /// Insert a driver expense entry.
     pub async fn record_cost(
         &self,
+        _org: &str,
+        _hub: &str,
         entry: &altius_core::CostEntry,
         driver_sub: &str,
     ) -> anyhow::Result<()> {
@@ -1144,6 +1146,7 @@ impl TypedbStore {
     /// List cost entries for a driver, optionally filtered to a day.
     pub async fn costs_for_driver(
         &self,
+        _org: &str,
         driver_sub: &str,
         day: Option<&str>,
     ) -> anyhow::Result<Vec<Value>> {
@@ -1162,6 +1165,7 @@ impl TypedbStore {
     /// Insert a daily LHS report.
     pub async fn record_daily_report(
         &self,
+        _org: &str,
         report: &altius_core::DailyReport,
         driver_sub: &str,
     ) -> anyhow::Result<()> {
@@ -1193,7 +1197,7 @@ impl TypedbStore {
     }
 
     /// List daily reports submitted by a driver.
-    pub async fn reports_for_driver(&self, driver_sub: &str) -> anyhow::Result<Vec<Value>> {
+    pub async fn reports_for_driver(&self, _org: &str, driver_sub: &str) -> anyhow::Result<Vec<Value>> {
         let q = format!(
             r#"match
                 $d isa user, has user-sub "{driver}";

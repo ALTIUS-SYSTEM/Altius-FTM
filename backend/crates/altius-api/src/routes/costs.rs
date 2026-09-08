@@ -30,8 +30,13 @@ async fn record_cost(
     // level now that amount_minor stays i64 for wire compatibility.
     req.validate()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let (org, hub) = store(&s)?
+        .organization_and_hub_of(&principal.subject)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::Forbidden)?;
     store(&s)?
-        .record_cost(&req, &principal.subject)
+        .record_cost(&org, &hub, &req, &principal.subject)
         .await
         .map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": { "id": req.id } })))
@@ -39,8 +44,9 @@ async fn record_cost(
 
 async fn list_costs(State(s): State<Arc<AppState>>, principal: AuthUser) -> ApiResult<Json<Value>> {
     let day = None::<&str>;
+    let org = org_of(&s, &principal.subject).await?;
     let costs = store(&s)?
-        .costs_for_driver(&principal.subject, day)
+        .costs_for_driver(&org, &principal.subject, day)
         .await
         .map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": costs })))
@@ -57,14 +63,14 @@ async fn record_report(
     req.status = LhsStatus::Submitted;
     req.revision = 0;
     req.driver_id = principal.subject.clone();
-    let (_, hub) = store(&s)?
+    let (org, hub) = store(&s)?
         .organization_and_hub_of(&principal.subject)
         .await
         .map_err(ApiError::Internal)?
-        .unwrap_or_default();
+        .ok_or(ApiError::Forbidden)?;
     req.hub_id = hub;
     store(&s)?
-        .record_daily_report(&req, &principal.subject)
+        .record_daily_report(&org, &req, &principal.subject)
         .await
         .map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": { "day": req.day } })))
@@ -74,8 +80,9 @@ async fn list_reports(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
 ) -> ApiResult<Json<Value>> {
+    let org = org_of(&s, &principal.subject).await?;
     let reports = store(&s)?
-        .reports_for_driver(&principal.subject)
+        .reports_for_driver(&org, &principal.subject)
         .await
         .map_err(ApiError::Internal)?;
     Ok(Json(json!({ "data": reports })))

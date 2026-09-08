@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
@@ -20,7 +20,7 @@ pub(crate) struct OptimizeRequest {
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v3/tasks", get(list_tasks))
-        .route("/api/v3/task/{id}", get(get_task).put(update_task))
+        .route("/api/v3/task/{id}", get(get_task).put(update_task).delete(delete_task))
         .route("/api/v3/task-create", post(create_task))
         .route("/api/v3/events", post(sync_events))
         .route("/api/v3/route/optimize", post(optimize_route))
@@ -97,6 +97,26 @@ async fn update_task(
         }
     })?;
     Ok(Json(json!({ "data": { "taskId": task.id } })))
+}
+
+async fn delete_task(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    require_staff(&principal)?;
+    let org = org_of(&s, &principal.subject).await?;
+    match store(&s)?
+        .delete_task(&org, &id)
+        .await
+        .map_err(ApiError::Internal)?
+    {
+        None => Err(ApiError::NotFound),
+        Some(false) => Err(ApiError::Conflict(
+            "task is in progress; cancel it before deleting".into(),
+        )),
+        Some(true) => Ok(Json(json!({ "data": { "deleted": id } }))),
+    }
 }
 
 async fn sync_events(

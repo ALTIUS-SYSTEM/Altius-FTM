@@ -9,6 +9,7 @@
   "scripts": {
     "dev:web": "pnpm --filter @altius/web dev",
     "dev:portal": "pnpm --filter @altius/developer-portal dev",
+    "sync:portal-openapi": "pnpm --filter @altius/developer-portal sync:openapi",
     "dev:mobile": "cd apps/mobile && flutter run",
     "test:mobile": "cd apps/mobile && flutter test",
     "analyze:mobile": "cd apps/mobile && flutter analyze",

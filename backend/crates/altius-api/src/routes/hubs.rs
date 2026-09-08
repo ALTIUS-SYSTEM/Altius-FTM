@@ -100,14 +100,22 @@ async fn delete_hub(
         .map_err(ApiError::Internal)?
     {
         return Err(ApiError::Conflict(
-            "hub still has tasks or teams; reassign them first".into(),
+            "hub still has tasks, teams, or audit records; reassign them first".into(),
         ));
     }
+    // The pre-check is not atomic with the delete: a task/report written in
+    // between trips a RESTRICT FK (SQLSTATE 23503) — answer 409, not 500.
     touched_or_404(
         store(&s)?
             .delete_hub(&org, &id)
             .await
-            .map_err(ApiError::Internal)?,
+            .map_err(|e| {
+                if crate::store::pg::is_fk_violation(&e) {
+                    ApiError::Conflict("hub is still referenced".into())
+                } else {
+                    ApiError::Internal(e)
+                }
+            })?,
     )
 }
 

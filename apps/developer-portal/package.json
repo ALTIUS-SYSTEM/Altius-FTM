@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "sync:openapi": "node ./scripts/sync-openapi.mjs",
+    "predev": "pnpm sync:openapi",
     "dev": "next dev --hostname 127.0.0.1 -p 3200",
+    "prebuild": "pnpm sync:openapi",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 -p 3200",
     "typecheck": "tsc --noEmit"

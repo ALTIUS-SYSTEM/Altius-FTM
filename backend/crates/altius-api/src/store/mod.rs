@@ -57,6 +57,15 @@ impl Store {
         }
     }
 
+    /// `None` — task not found; `Some(false)` — in progress, cancel first;
+    /// `Some(true)` — deleted.
+    pub async fn delete_task(&self, org: &str, task_id: &str) -> anyhow::Result<Option<bool>> {
+        match self {
+            Self::Postgres(s) => s.delete_task(org, task_id).await,
+            Self::Typedb(_) => anyhow::bail!("task delete is not supported on the TypeDB backend"),
+        }
+    }
+
     pub async fn record_event(
         &self,
         org: &str,
@@ -295,41 +304,45 @@ impl Store {
 
     pub async fn record_cost(
         &self,
+        org: &str,
+        hub: &str,
         entry: &altius_core::CostEntry,
         driver_sub: &str,
     ) -> anyhow::Result<()> {
         match self {
-            Self::Postgres(s) => s.record_cost(entry, driver_sub).await,
-            Self::Typedb(s) => s.record_cost(entry, driver_sub).await,
+            Self::Postgres(s) => s.record_cost(org, hub, entry, driver_sub).await,
+            Self::Typedb(s) => s.record_cost(org, hub, entry, driver_sub).await,
         }
     }
 
     pub async fn costs_for_driver(
         &self,
+        org: &str,
         driver_sub: &str,
         day: Option<&str>,
     ) -> anyhow::Result<Vec<Value>> {
         match self {
-            Self::Postgres(s) => s.costs_for_driver(driver_sub, day).await,
-            Self::Typedb(s) => s.costs_for_driver(driver_sub, day).await,
+            Self::Postgres(s) => s.costs_for_driver(org, driver_sub, day).await,
+            Self::Typedb(s) => s.costs_for_driver(org, driver_sub, day).await,
         }
     }
 
     pub async fn record_daily_report(
         &self,
+        org: &str,
         report: &altius_core::DailyReport,
         driver_sub: &str,
     ) -> anyhow::Result<()> {
         match self {
-            Self::Postgres(s) => s.record_daily_report(report, driver_sub).await,
-            Self::Typedb(s) => s.record_daily_report(report, driver_sub).await,
+            Self::Postgres(s) => s.record_daily_report(org, report, driver_sub).await,
+            Self::Typedb(s) => s.record_daily_report(org, report, driver_sub).await,
         }
     }
 
-    pub async fn reports_for_driver(&self, driver_sub: &str) -> anyhow::Result<Vec<Value>> {
+    pub async fn reports_for_driver(&self, org: &str, driver_sub: &str) -> anyhow::Result<Vec<Value>> {
         match self {
-            Self::Postgres(s) => s.reports_for_driver(driver_sub).await,
-            Self::Typedb(s) => s.reports_for_driver(driver_sub).await,
+            Self::Postgres(s) => s.reports_for_driver(org, driver_sub).await,
+            Self::Typedb(s) => s.reports_for_driver(org, driver_sub).await,
         }
     }
 

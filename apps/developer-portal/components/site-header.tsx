@@ -46,7 +46,7 @@ export function SiteHeader({ locale }: Props) {
           <span className="font-heading text-lg font-bold tracking-tight text-primary">
             Altius-FTM
             <span className="ml-1.5 hidden text-sm font-semibold text-on-surface-variant sm:inline">
-              Docs
+              {labels.productShortLabel}
             </span>
           </span>
         </Link>

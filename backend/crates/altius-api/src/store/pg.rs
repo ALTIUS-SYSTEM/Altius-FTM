@@ -23,6 +23,17 @@ fn ssl_mode_requires_tls(mode: tokio_postgres::config::SslMode) -> bool {
     matches!(mode, tokio_postgres::config::SslMode::Require)
 }
 
+/// True when the error chain bottoms out at a Postgres foreign-key violation
+/// (SQLSTATE 23503). Routes use this to answer 409 Conflict instead of 500
+/// when a RESTRICT constraint fires — e.g. a hub delete racing a task create.
+pub fn is_fk_violation(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<tokio_postgres::Error>()
+            .and_then(|pg| pg.as_db_error())
+            .is_some_and(|db| *db.code() == tokio_postgres::error::SqlState::FOREIGN_KEY_VIOLATION)
+    })
+}
+
 fn rustls_connector() -> tokio_postgres_rustls::MakeRustlsConnect {
     // Idempotent: Prefer/Require paths may call this more than once per process.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -219,6 +230,39 @@ impl PgStore {
         .await
     }
 
+    /// Same shape as `tasks_for_org`, scoped to tasks assigned to this driver.
+    /// A driver has no claim flow — every task on their board is staff-pushed,
+    /// so an org-wide list only leaks colleagues' work.
+    pub async fn tasks_for_driver(
+        &self,
+        org_id: &str,
+        driver_sub: &str,
+    ) -> anyhow::Result<Vec<Value>> {
+        self.fetch_json(
+            "SELECT jsonb_build_object( \
+                'task', to_jsonb(t) || jsonb_build_object( \
+                    'assignee', ( \
+                        SELECT ta.driver_sub FROM task_assignments ta \
+                        WHERE ta.task_id = t.id LIMIT 1 \
+                    ) \
+                ), \
+                'stops', COALESCE(( \
+                    SELECT jsonb_agg(row_to_json(s) ORDER BY s.sequence) \
+                    FROM stops s WHERE s.task_id = t.id \
+                ), '[]'::jsonb) \
+             ) AS data \
+             FROM tasks t \
+             WHERE t.org_id = $1 \
+               AND EXISTS ( \
+                   SELECT 1 FROM task_assignments ta \
+                   WHERE ta.task_id = t.id AND ta.driver_sub = $2 \
+               ) \
+             ORDER BY t.id",
+            &[&org_id, &driver_sub],
+        )
+        .await
+    }
+
     pub async fn task_by_id(&self, org_id: &str, task_id: &str) -> anyhow::Result<Option<Value>> {
         self.fetch_json_opt(
             "SELECT jsonb_build_object( \
@@ -302,8 +346,8 @@ impl PgStore {
 
         if let Some(assignee) = &task.assignee_id {
             tx.execute(
-                "INSERT INTO task_assignments (task_id, driver_sub) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                &[&task.id, assignee],
+                "INSERT INTO task_assignments (task_id, driver_sub, org_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+                &[&task.id, assignee, &org],
             )
             .await
             .context("assign task")?;
@@ -343,6 +387,28 @@ impl PgStore {
             return Ok(EventReceipt::Accepted {
                 event_id,
                 server_event_id: id,
+            });
+        }
+
+        // Lock the task row before touching stops: `update_task` locks
+        // tasks→stops, so this path must take them in the same order or a
+        // concurrent staff edit + driver event on one task can deadlock.
+        // Doubles as a cheap "task exists in this org" check. Placed after the
+        // idempotency lookup — that SELECT takes no lock, and a replay of an
+        // already-accepted event must return Accepted even if the task was
+        // deleted in the meantime.
+        let task_exists: bool = tx
+            .query_opt(
+                "SELECT id FROM tasks WHERE id = $2 AND org_id = $1 FOR UPDATE",
+                &[&org, &ev.task_id],
+            )
+            .await
+            .context("lock task row")?
+            .is_some();
+        if !task_exists {
+            return Ok(EventReceipt::Conflict {
+                event_id,
+                reason: format!("task {} not found in this organization", ev.task_id),
             });
         }
 
@@ -419,11 +485,12 @@ impl PgStore {
         let stop_for_insert = resolved_stop.clone();
         tx.execute(
             "INSERT INTO device_events \
-             (id, org_id, driver_sub, device_id, task_id, stop_id, request_key, action, occurred_utc, offset_min, day, payload) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+             (id, org_id, hub_id, driver_sub, device_id, task_id, stop_id, request_key, action, occurred_utc, offset_min, day, payload) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
             &[
                 &ev.event_id,
                 &org,
+                &ev.hub_id,
                 &driver_sub,
                 &ev.device_id,
                 &ev.task_id,
@@ -572,27 +639,51 @@ impl PgStore {
             anyhow::bail!("task {} not found in organization {org}", task.id);
         }
 
-        if let Some(stop) = task.stops.first() {
+        // Every stop the client sent is upserted; stops absent from the
+        // payload are left alone — removing stops is a delete_task concern,
+        // not something an edit payload implies.
+        for stop in &task.stops {
             let sstage = serde_json::to_value(stop.status)?
                 .as_str()
                 .unwrap_or("pending")
                 .to_string();
-            tx.execute(
-                "UPDATE stops SET name = $3, address = $4, lat = $5, lng = $6, stage = $7, service_seconds = $8 \
-                 WHERE id = $2 AND task_id = $1",
-                &[
-                    &task.id,
-                    &stop.id,
-                    &stop.name,
-                    &stop.address,
-                    &stop.location.lat,
-                    &stop.location.lng,
-                    &sstage,
-                    &(stop.service_seconds as i64),
-                ],
-            )
-            .await
-            .context("update stop")?;
+            let updated_stop = tx
+                .execute(
+                    "UPDATE stops SET sequence = $3, name = $4, address = $5, lat = $6, lng = $7, stage = $8, service_seconds = $9 \
+                     WHERE id = $2 AND task_id = $1",
+                    &[
+                        &task.id,
+                        &stop.id,
+                        &(stop.sequence as i64),
+                        &stop.name,
+                        &stop.address,
+                        &stop.location.lat,
+                        &stop.location.lng,
+                        &sstage,
+                        &(stop.service_seconds as i64),
+                    ],
+                )
+                .await
+                .context("update stop")?;
+            if updated_stop == 0 {
+                tx.execute(
+                    "INSERT INTO stops (id, task_id, sequence, name, address, lat, lng, stage, service_seconds) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                    &[
+                        &stop.id,
+                        &task.id,
+                        &(stop.sequence as i64),
+                        &stop.name,
+                        &stop.address,
+                        &stop.location.lat,
+                        &stop.location.lng,
+                        &sstage,
+                        &(stop.service_seconds as i64),
+                    ],
+                )
+                .await
+                .context("insert stop")?;
+            }
         }
 
         tx.execute(
@@ -603,8 +694,8 @@ impl PgStore {
         .context("clear assignments")?;
         if let Some(assignee) = &task.assignee_id {
             tx.execute(
-                "INSERT INTO task_assignments (task_id, driver_sub) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                &[&task.id, assignee],
+                "INSERT INTO task_assignments (task_id, driver_sub, org_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+                &[&task.id, assignee, &org],
             )
             .await
             .context("assign task")?;
@@ -612,6 +703,38 @@ impl PgStore {
 
         tx.commit().await.context("commit update_task")?;
         Ok(())
+    }
+
+    /// Delete a task and its stops/assignments (FK cascade). Device events
+    /// keep the audit trail — their `task_id` is ON DELETE SET NULL.
+    /// Refuses `in_progress` tasks: staff must cancel first, otherwise an
+    /// active driver loses the task mid-route with no signal.
+    /// Returns `Ok(true)` when a row was deleted.
+    pub async fn delete_task(&self, org: &str, task_id: &str) -> anyhow::Result<Option<bool>> {
+        let mut client = self.conn().await?;
+        let tx = client.transaction().await.context("open delete_task tx")?;
+        let stage: Option<String> = tx
+            .query_opt(
+                "SELECT stage FROM tasks WHERE id = $2 AND org_id = $1 FOR UPDATE",
+                &[&org, &task_id],
+            )
+            .await
+            .context("lock task for delete")?
+            .map(|r| r.get(0));
+        let Some(stage) = stage else {
+            return Ok(None);
+        };
+        if stage == "in_progress" {
+            return Ok(Some(false));
+        }
+        tx.execute(
+            "DELETE FROM tasks WHERE id = $2 AND org_id = $1",
+            &[&org, &task_id],
+        )
+        .await
+        .context("delete task")?;
+        tx.commit().await.context("commit delete_task")?;
+        Ok(Some(true))
     }
 
     // ---------- bootstrap ----------
@@ -780,12 +903,20 @@ impl PgStore {
     }
 
     pub async fn hub_in_use(&self, org: &str, hub_id: &str) -> anyhow::Result<bool> {
+        // Covers every FK that blocks the delete: RESTRICT in V3 (tasks,
+        // daily_reports, vehicle_checks, gps_reviews) plus the membership
+        // tables the app wants detached first. device_events, cost_entries
+        // and gps_observations are ON DELETE SET NULL — they must NOT appear
+        // here, or a hub with any history could never be removed.
         self.fetch_bool(
             "SELECT EXISTS(SELECT 1 FROM org_hubs WHERE org_id = $1 AND hub_id = $2) AND ( \
                 EXISTS(SELECT 1 FROM tasks WHERE hub_id = $2) OR \
                 EXISTS(SELECT 1 FROM team_hubs WHERE hub_id = $2) OR \
                 EXISTS(SELECT 1 FROM user_hubs WHERE hub_id = $2) OR \
-                EXISTS(SELECT 1 FROM hub_vehicles WHERE hub_id = $2) \
+                EXISTS(SELECT 1 FROM hub_vehicles WHERE hub_id = $2) OR \
+                EXISTS(SELECT 1 FROM daily_reports WHERE hub_id = $2) OR \
+                EXISTS(SELECT 1 FROM vehicle_checks WHERE hub_id = $2) OR \
+                EXISTS(SELECT 1 FROM gps_reviews WHERE hub_id = $2) \
              )",
             &[&org, &hub_id],
         )
@@ -1114,6 +1245,8 @@ impl PgStore {
 
     pub async fn record_cost(
         &self,
+        org: &str,
+        hub: &str,
         entry: &altius_core::CostEntry,
         driver_sub: &str,
     ) -> anyhow::Result<()> {
@@ -1124,10 +1257,12 @@ impl PgStore {
             .to_string();
         client
             .execute(
-                "INSERT INTO cost_entries (id, driver_sub, category, amount_minor, currency, note, day) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                "INSERT INTO cost_entries (id, org_id, hub_id, driver_sub, category, amount_minor, currency, note, day) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
                 &[
                     &entry.id,
+                    &org,
+                    &hub,
                     &driver_sub,
                     &category,
                     &entry.amount_minor,
@@ -1142,15 +1277,16 @@ impl PgStore {
 
     pub async fn costs_for_driver(
         &self,
+        org: &str,
         driver_sub: &str,
         day: Option<&str>,
     ) -> anyhow::Result<Vec<Value>> {
         self.fetch_json(
             "SELECT jsonb_build_object('entry', row_to_json(c)) AS data \
              FROM cost_entries c \
-             WHERE c.driver_sub = $1 AND ($2::text IS NULL OR c.day = $2) \
+             WHERE c.org_id = $1 AND c.driver_sub = $2 AND ($3::text IS NULL OR c.day = $3) \
              ORDER BY c.day, c.id",
-            &[&driver_sub, &day],
+            &[&org, &driver_sub, &day],
         )
         .await
     }
@@ -1159,6 +1295,7 @@ impl PgStore {
 
     pub async fn record_daily_report(
         &self,
+        org: &str,
         report: &altius_core::DailyReport,
         driver_sub: &str,
     ) -> anyhow::Result<()> {
@@ -1170,10 +1307,11 @@ impl PgStore {
         client
             .execute(
                 "INSERT INTO daily_reports \
-                 (driver_sub, day, status, revision, hub_id, driver_name, vehicle_number, \
+                 (org_id, driver_sub, day, status, revision, hub_id, driver_name, vehicle_number, \
                   odometer_start, odometer_end, notes, visited_task_ids, completed_stop_ids, payload) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
                 &[
+                    &org,
                     &driver_sub,
                     &report.day,
                     &status,
@@ -1193,13 +1331,13 @@ impl PgStore {
         Ok(())
     }
 
-    pub async fn reports_for_driver(&self, driver_sub: &str) -> anyhow::Result<Vec<Value>> {
+    pub async fn reports_for_driver(&self, org: &str, driver_sub: &str) -> anyhow::Result<Vec<Value>> {
         self.fetch_json(
             "SELECT jsonb_build_object('report', row_to_json(r)) AS data \
              FROM daily_reports r \
-             WHERE r.driver_sub = $1 \
+             WHERE r.org_id = $1 AND r.driver_sub = $2 \
              ORDER BY r.day",
-            &[&driver_sub],
+            &[&org, &driver_sub],
         )
         .await
     }
