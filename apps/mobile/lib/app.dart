@@ -775,11 +775,12 @@ class SettingsTab extends StatelessWidget {
             Text(s('workspace'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(initialValue: state.organization, decoration: InputDecoration(labelText: s('organization')),
-              items: ['Altius Demo', 'Altius Training'].map((o) => DropdownMenuItem(value: o, child: Text(o))).toList(),
+              // Live orgs come from the backend (e.g. `altius`), not the demo
+              // list — include the current value so the assertion holds.
+              items: {if (state.organization.isNotEmpty) state.organization, 'Altius Demo', 'Altius Training'}.map((o) => DropdownMenuItem(value: o, child: Text(o))).toList(),
               onChanged: (v) { if (v != null) cubit.act(() => cubit.store.selectWorkspace(v, state.hub)); }),
-            const SizedBox(height: 10),
             DropdownButtonFormField<String>(initialValue: state.hub, decoration: InputDecoration(labelText: s('hub')),
-              items: ['Jakarta', 'Bandung', 'Surabaya'].map((h) => DropdownMenuItem(value: h, child: Text(h))).toList(),
+              items: {if (state.hub.isNotEmpty) state.hub, 'Jakarta', 'Bandung', 'Surabaya'}.map((h) => DropdownMenuItem(value: h, child: Text(h))).toList(),
               onChanged: (v) { if (v != null) cubit.act(() => cubit.store.selectWorkspace(state.organization, v)); }),
             const SizedBox(height: 6),
             Text(Strings.fallback['workspaceBody']!, style: const TextStyle(fontSize: 11, color: Colors.grey)),
