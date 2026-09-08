@@ -10,6 +10,9 @@ const ROLE_MAP: Record<string, DemoState["role"]> = {
   admin: "Admin",
   supervisor: "Supervisor",
   lead: "Lead",
+  // DemoState personas are staff-only (no Driver). Map driver→Lead so the
+  // documented driver/changeme Keycloak login still enters the demo shell;
+  // API authz remains realm-role based, not this UI label.
   driver: "Lead",
 };
 

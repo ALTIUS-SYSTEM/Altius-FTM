@@ -125,8 +125,11 @@ services:
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    # localhost-only: local curl/mobile hit :8080 directly; on a VPS public
+    # traffic goes through Caddy /api/v3/*. Also keeps Prometheus /metrics
+    # off the public interface (Caddy does not proxy /metrics).
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy

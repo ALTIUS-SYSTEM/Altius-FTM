@@ -163,7 +163,8 @@ const toApiTask = (
     tenant_id: scope.tenantId,
     hub_id: task.hub || scope.hubId,
     title: task.title,
-    status: status === "unassigned" && assigneeLooksLikeSub ? "assigned" : status === "unassigned" ? "assigned" : status,
+    // API has no unassigned stage; promote on write regardless of assignee shape.
+    status: status === "unassigned" ? "assigned" : status,
     assignee_id: assigneeLooksLikeSub ? task.assignee : null,
     stops: [
       {

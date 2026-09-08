@@ -94,12 +94,21 @@ impl Jwks {
                 .any(|k| k.common.key_id.as_deref() == Some(kid));
             // `kid` is attacker-controlled and read before any signature check,
             // so an unknown one must not buy an uncached outbound fetch on every
-            // request. Honour the TTL always; honour unknown-kid only outside
-            // the cooldown.
-            stale || (unknown_kid && guard.attempted_at.elapsed() > JWKS_REFRESH_COOLDOWN)
+            // request. The cooldown also applies to the stale path: when the
+            // IdP is down, an un-cooled-down refresh turns every authenticated
+            // request into a 10s outbound fetch that hammers it further.
+            (stale || unknown_kid) && guard.attempted_at.elapsed() > JWKS_REFRESH_COOLDOWN
         };
         if need_refresh {
-            self.refresh().await?;
+            // A failed refresh must not evict the cached set: a stale key is
+            // still better than no key when the IdP is briefly unreachable.
+            if let Err(e) = self.refresh().await {
+                let has_keys = !self.inner.read().await.keys.keys.is_empty();
+                if !has_keys {
+                    return Err(e);
+                }
+                tracing::warn!(error = %e, "jwks refresh failed; serving stale set");
+            }
         }
         let guard = self.inner.read().await;
         guard.keys.find(kid).cloned().ok_or(ApiError::Unauthorized)

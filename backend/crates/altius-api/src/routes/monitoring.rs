@@ -104,7 +104,13 @@ async fn trigger_mceasy_sync(
     Ok(Json(json!({ "data": { "syncing": true } })))
 }
 
-async fn mceasy_status(State(s): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+async fn mceasy_status(
+    State(s): State<Arc<AppState>>,
+    principal: AuthUser,
+) -> ApiResult<Json<Value>> {
+    // Same gate as the other monitoring routes: the response discloses the
+    // upstream base URL and poll cadence, which is not public information.
+    require_super_admin(&principal)?;
     Ok(Json(json!({
         "data": {
             "configured": s.mceasy_client.is_some(),

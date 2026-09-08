@@ -55,6 +55,14 @@ async fn refresh(
     State(s): State<Arc<AppState>>,
     Json(req): Json<RefreshRequest>,
 ) -> ApiResult<Json<Value>> {
+    // Refresh is the continuation of the password grant; leaving it open while
+    // `login` is gated would let a captured refresh token keep minting access
+    // tokens after the grant was switched off.
+    if !s.config.allow_password_grant {
+        return Err(ApiError::Unavailable(
+            "resource-owner password grant is disabled".into(),
+        ));
+    }
     if req.refresh_token.is_empty() {
         return Err(ApiError::BadRequest("refresh_token required".into()));
     }

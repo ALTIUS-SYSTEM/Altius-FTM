@@ -388,7 +388,12 @@ class WorkStore {
   }
 
   /// Pull the server task list into local SQLite when authenticated.
-  /// Preserves in-flight local stage for tasks that already have pending events.
+  ///
+  /// Upserts server rows and only deletes local tasks that are absent from the
+  /// server **and** have no pending outbox events. Tasks with pending proof-of-
+  /// service stay local (including their in-flight stage) so a wipe-all pull
+  /// cannot drop unsynced work. Completed work removed on the server still
+  /// disappears once its outbox is clear.
   Future<int> pullTasks({required String baseUrl, required String accessToken}) =>
       _write(() async {
         final client = HttpClient();
@@ -412,9 +417,10 @@ class WorkStore {
           final localById = {
             for (final t in await tasks()) t.id: t,
           };
-          await _db.customStatement('DELETE FROM tasks');
+          final serverIds = <String>{};
           for (final row in rows) {
             final id = row[0] as String;
+            serverIds.add(id);
             // Keep the driver's unsynced local stage so a pull cannot rewind an
             // arrival that is still sitting in the outbox.
             if (pendingEntities.contains(id) && localById.containsKey(id)) {
@@ -429,6 +435,12 @@ class WorkStore {
                 row,
               );
             }
+          }
+          for (final localId in localById.keys) {
+            if (serverIds.contains(localId) || pendingEntities.contains(localId)) {
+              continue;
+            }
+            await _db.customStatement('DELETE FROM tasks WHERE id = ?', [localId]);
           }
           return rows.length;
         } finally {
@@ -825,10 +837,16 @@ class WorkStore {
         _ => null,
       };
 
+  /// Server `POST /api/v3/events` rejects batches larger than this.
+  static const int _eventsBatchLimit = 500;
+
   /// Push pending task-stage events to `POST {baseUrl}/api/v3/events` and mark
   /// each row by its receipt. Local-only events are stamped 'local' so they
-  /// stop counting toward the outbox. Requires [accessToken] (Keycloak JWT
-  /// with the `driver` role). Throws on transport/HTTP failure.
+  /// stop counting toward the outbox. Syncable events are POSTed in chunks of
+  /// at most [_eventsBatchLimit] so a large outbox cannot 400 the whole flush.
+  /// Requires [accessToken] (Keycloak JWT with the `driver` role). Throws on
+  /// transport/HTTP failure. Returns the number of events that received a
+  /// terminal receipt (`accepted` / `rejected`).
   Future<int> syncNow({required String baseUrl, required String? accessToken}) =>
       _write(() async {
         if (accessToken == null || accessToken.isEmpty) throw StateError('unauthorized');
@@ -839,8 +857,10 @@ class WorkStore {
         final events = pending.map(WorkEvent.new).toList();
         final deviceId = await _ensureDeviceId();
         final localTasks = {for (final t in await tasks()) t.id: t};
+        final tenantId = await preference('organization');
+        final hubId = await preference('hub');
+        final driverId = await preference('driverId').then((v) => v.isEmpty ? 'demo-driver' : v);
 
-        var sent = 0;
         final batch = <Map<String, Object?>>[];
         final syncable = <WorkEvent>[];
         for (final e in events) {
@@ -864,9 +884,9 @@ class WorkStore {
           batch.add({
             'event_id': e.id,
             'idempotency_key': e.requestKey ?? e.id,
-            'tenant_id': await preference('organization'),
-            'hub_id': await preference('hub'),
-            'driver_id': await preference('driverId').then((v) => v.isEmpty ? 'demo-driver' : v),
+            'tenant_id': tenantId,
+            'hub_id': hubId,
+            'driver_id': driverId,
             'device_id': deviceId,
             'task_id': e.entity,
             'stop_id': stopId,
@@ -880,7 +900,6 @@ class WorkStore {
             'payload': e.payload,
           });
           syncable.add(e);
-          sent++;
         }
 
         if (batch.isEmpty) {
@@ -888,67 +907,71 @@ class WorkStore {
           return 0;
         }
 
+        var acked = 0;
+        var partial = false;
         try {
           final client = HttpClient();
           try {
-            final req = await client.postUrl(Uri.parse('$baseUrl/api/v3/events'));
-            req.headers.contentType = ContentType.json;
-            req.headers.set('authorization', 'Bearer $accessToken');
-            req.write(jsonEncode(batch));
-            final res = await req.close().timeout(const Duration(seconds: 15));
-            final body = await res.transform(utf8.decoder).join();
-            if (res.statusCode != 200) {
-              await _pref('syncError', 'http${res.statusCode}');
-              throw HttpException('sync failed: ${res.statusCode}');
-            }
-            final decoded = jsonDecode(body) as Map<String, dynamic>;
-            final receipts = (decoded['data'] as List?) ?? const [];
-            // Match receipts by identity, never by array position. A reordered,
-            // truncated or fabricated response would otherwise stamp one event's
-            // delivery status onto another — and a row that leaves 'pending' is
-            // never retried, so that is permanent loss of proof-of-service.
-            final byId = {for (final e in syncable) e.id: e};
-            final seen = <String>{};
-            for (final entry in receipts) {
-              if (entry is! Map<String, dynamic>) continue;
-              final id = entry['event_id'] ?? entry['server_event_id'];
-              if (id is! String || !byId.containsKey(id)) continue;
-              // Terminal statuses clear the outbox. `conflict` is permanent for
-              // invalid transitions (retrying cannot help). Unknown statuses
-              // stay pending so a partial/weird response is resent.
-              final raw = entry['status'];
-              final status = raw == 'accepted'
-                  ? 'accepted'
-                  : (raw == 'rejected' || raw == 'conflict')
-                      ? 'rejected'
-                      : null;
-              if (status == null) continue;
-              seen.add(id);
-              await _db.customStatement(
-                'UPDATE events SET delivery = ? WHERE id = ?',
-                [status, id],
-              );
-            }
-            // An event we sent but heard nothing about is still pending, not
-            // delivered. Surface the shortfall instead of reporting a clean run.
-            if (seen.length != syncable.length) {
-              await _pref('syncError', 'partial');
+            for (var offset = 0; offset < batch.length; offset += _eventsBatchLimit) {
+              final end = min(offset + _eventsBatchLimit, batch.length);
+              final chunk = batch.sublist(offset, end);
+              final chunkSyncable = syncable.sublist(offset, end);
+              final req = await client.postUrl(Uri.parse('$baseUrl/api/v3/events'));
+              req.headers.contentType = ContentType.json;
+              req.headers.set('authorization', 'Bearer $accessToken');
+              req.write(jsonEncode(chunk));
+              final res = await req.close().timeout(const Duration(seconds: 15));
+              final body = await res.transform(utf8.decoder).join();
+              if (res.statusCode != 200) {
+                await _pref('syncError', 'http${res.statusCode}');
+                throw HttpException('sync failed: ${res.statusCode}');
+              }
+              final decoded = jsonDecode(body) as Map<String, dynamic>;
+              final receipts = (decoded['data'] as List?) ?? const [];
+              // Match receipts by identity, never by array position. A reordered,
+              // truncated or fabricated response would otherwise stamp one event's
+              // delivery status onto another — and a row that leaves 'pending' is
+              // never retried, so that is permanent loss of proof-of-service.
+              final byId = {for (final e in chunkSyncable) e.id: e};
+              final seen = <String>{};
+              for (final entry in receipts) {
+                if (entry is! Map<String, dynamic>) continue;
+                final id = entry['event_id'] ?? entry['server_event_id'];
+                if (id is! String || !byId.containsKey(id)) continue;
+                // Terminal statuses clear the outbox. `conflict` is permanent for
+                // invalid transitions (retrying cannot help). Unknown statuses
+                // stay pending so a partial/weird response is resent.
+                final raw = entry['status'];
+                final status = raw == 'accepted'
+                    ? 'accepted'
+                    : (raw == 'rejected' || raw == 'conflict')
+                        ? 'rejected'
+                        : null;
+                if (status == null) continue;
+                seen.add(id);
+                await _db.customStatement(
+                  'UPDATE events SET delivery = ? WHERE id = ?',
+                  [status, id],
+                );
+              }
+              acked += seen.length;
+              // An event we sent but heard nothing about is still pending, not
+              // delivered. Surface the shortfall instead of reporting a clean run.
+              if (seen.length != chunkSyncable.length) {
+                partial = true;
+              }
             }
           } finally {
             client.close();
           }
-          if (await preference('syncError') == 'partial') {
-            // Keep the partial marker; do not report success.
-          } else {
-            await _pref('syncError', '');
-          }
+          await _pref('syncError', partial ? 'partial' : '');
         } on Object {
           if (await preference('syncError') == '') {
             await _pref('syncError', 'transport');
           }
           rethrow;
         }
-        return sent;
+        return acked;
       });
 
   Future<void> selectWorkspace(String organization, String hub) => _write(() async {

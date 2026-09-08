@@ -195,21 +195,30 @@ fn parse_batch_response(
     Ok(results)
 }
 
+/// Byte offset just past the header/body separator of a multipart part.
+/// `+4` for CRLFCRLF, `+2` for the bare-LF fallback — adding 4 unconditionally
+/// sliced two bytes into the JSON body and broke parsing on the `\n\n` path.
+fn body_start(inner: &str) -> Option<usize> {
+    inner
+        .find("\r\n\r\n")
+        .map(|i| i + 4)
+        .or_else(|| inner.find("\n\n").map(|i| i + 2))
+}
+
 fn parse_success_name(inner: &str) -> Option<String> {
     let first = inner.lines().next().unwrap_or("");
     if !first.contains("200") {
         return None;
     }
-    let json_start = inner.find("\r\n\r\n").or_else(|| inner.find("\n\n"))? + 4;
-    let json = &inner[json_start..];
+    let json = &inner[body_start(inner)?..];
     serde_json::from_str::<serde_json::Value>(json)
         .ok()
         .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
 }
 
 fn extract_error(inner: &str) -> String {
-    if let Some(json_start) = inner.find("\r\n\r\n").or_else(|| inner.find("\n\n")) {
-        let json = &inner[json_start + 4..];
+    if let Some(json_start) = body_start(inner) {
+        let json = &inner[json_start..];
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
             if let Some(msg) = v
                 .get("error")

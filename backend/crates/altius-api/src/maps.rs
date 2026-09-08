@@ -256,15 +256,16 @@ impl MapsClient {
                 "at most {MAX_OPTIMIZE_WAYPOINTS} waypoints per optimize call"
             )));
         }
-        let wp = waypoints
+        // The last waypoint is the destination; Directions treats `waypoints`
+        // as *intermediate* stops, so including it there would visit it twice
+        // and pollute `waypoint_order`.
+        let (dest_pt, intermediates) = waypoints.split_last().unwrap();
+        let wp = intermediates
             .iter()
             .map(|p| format!("{},{}", p.lat, p.lng))
             .collect::<Vec<_>>()
             .join("|");
-        let dest = waypoints
-            .last()
-            .map(|p| format!("{},{}", p.lat, p.lng))
-            .unwrap();
+        let dest = format!("{},{}", dest_pt.lat, dest_pt.lng);
         let res: DirectionsResponse = self
             .get(
                 DIRECTIONS_URL,
@@ -286,15 +287,21 @@ impl MapsClient {
             // upstream response would otherwise hand a client an out-of-range
             // index to dereference against its own array.
             order: {
+                // `waypoint_order` indexes the *intermediate* list we sent
+                // (destination excluded). Map back to caller indices and
+                // append the destination last.
                 let o = &route.waypoint_order;
-                let in_range = o.iter().all(|&i| i < waypoints.len());
+                let n_intermediate = waypoints.len() - 1;
+                let in_range = o.iter().all(|&i| i < n_intermediate);
                 let unique = o.iter().collect::<std::collections::HashSet<_>>().len() == o.len();
-                if o.len() == waypoints.len() && in_range && unique {
-                    o.clone()
+                if o.len() == n_intermediate && in_range && unique {
+                    let mut order = o.clone();
+                    order.push(waypoints.len() - 1);
+                    order
                 } else {
                     tracing::warn!(
                         got = o.len(),
-                        want = waypoints.len(),
+                        want = n_intermediate,
                         "maps returned an unusable waypoint_order; falling back to input order"
                     );
                     (0..waypoints.len()).collect()
@@ -463,10 +470,17 @@ fn static_map_query(
         ("format", "png".to_string()),
     ];
     // Numbered pins in visit order, so the image alone tells the sequence.
+    // Google marker labels are a single A-Z/0-9 character; past 26 stops the
+    // label is omitted rather than repeating digits ambiguously.
     for (i, m) in markers.iter().take(MAX_OPTIMIZE_WAYPOINTS + 1).enumerate() {
+        let label = if i < 26 {
+            format!("|label:{}", (b'A' + i as u8) as char)
+        } else {
+            String::new()
+        };
         query.push((
             "markers",
-            format!("color:0x0FA3B1|label:{}|{},{}", (i % 9) + 1, m.lat, m.lng),
+            format!("color:0x0FA3B1{label}|{},{}", m.lat, m.lng),
         ));
     }
     if let Some(p) = polyline {

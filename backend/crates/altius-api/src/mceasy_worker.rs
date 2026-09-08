@@ -122,6 +122,8 @@ impl MceasyWorker {
 
     pub(crate) async fn poll_org(&self, org: &str) -> anyhow::Result<()> {
         let vehicles = self.store.monitoring_vehicles(org).await?;
+        // Keys are lowercased: `sync_org` matches plates case-insensitively,
+        // and McEasy's `license_plate` casing is not guaranteed to equal ours.
         let mut by_plate: HashMap<String, (String, Option<String>)> = HashMap::new();
         for v in &vehicles {
             let plate = extract_str(v, "vehicle", "plate").unwrap_or_default();
@@ -129,11 +131,25 @@ impl MceasyWorker {
             if let Some(mid) = mceasy_id {
                 let hub_id = extract_str(v, "hub", "hub-id").unwrap_or_default();
                 by_plate.insert(
-                    plate.to_string(),
+                    plate.to_lowercase(),
                     (hub_id.to_string(), Some(mid.to_string())),
                 );
             }
         }
+
+        // McEasy driver ids are not Keycloak subjects; the master sync stores
+        // the mapping on `users.mceasy_driver_id`. Without it, app samples
+        // (keyed by user_sub) never pair with vehicle positions.
+        let users = self.store.users_for_org(org).await?;
+        let driver_to_sub: HashMap<String, String> = users
+            .iter()
+            .filter_map(|u| {
+                let user = u.get("user")?;
+                let mceasy_id = user.get("mceasy_driver_id").and_then(Value::as_str)?;
+                let sub = user.get("sub").and_then(Value::as_str)?;
+                Some((mceasy_id.to_string(), sub.to_string()))
+            })
+            .collect();
 
         if by_plate.is_empty() {
             return Ok(());
@@ -171,23 +187,33 @@ impl MceasyWorker {
         let app_samples = observations_to_samples(&app_obs)?;
 
         for pos in positions {
-            let Some(plate) = pos.license_plate.as_deref().or_else(|| {
-                by_plate
-                    .iter()
-                    .find(|(_, (_, mid))| mid.as_deref() == pos.vehicle_id.as_deref())
-                    .map(|(p, _)| p.as_str())
-            }) else {
+            let Some(plate) = pos
+                .license_plate
+                .as_deref()
+                .map(|p| p.to_lowercase())
+                .or_else(|| {
+                    by_plate
+                        .iter()
+                        .find(|(_, (_, mid))| mid.as_deref() == pos.vehicle_id.as_deref())
+                        .map(|(p, _)| p.clone())
+                }) else {
                 continue;
             };
-            let Some((hub_id, _)) = by_plate.get(plate) else {
+            let Some((hub_id, _)) = by_plate.get(&plate) else {
                 continue;
             };
 
-            let driver_id = pos
+            // Resolve the McEasy driver id to the local user_sub so it pairs
+            // with app observations; fall back to the raw id when unmapped.
+            let mceasy_driver = pos
                 .driver_id
                 .clone()
                 .or(pos.driver_name.clone())
                 .unwrap_or_default();
+            let driver_id = driver_to_sub
+                .get(&mceasy_driver)
+                .cloned()
+                .unwrap_or(mceasy_driver);
             let recorded_at = pos.recorded_at.unwrap_or_else(Utc::now);
 
             let obs = GpsObservation {
@@ -246,13 +272,27 @@ impl MceasyWorker {
                 },
             );
 
+            // The review cites the app observation closest in time to the
+            // vehicle fix — not the vehicle observation itself, which is what
+            // `vehicle_observation_id` is for.
+            let app_observation_id = app_samples
+                .iter()
+                .filter(|s| s.driver_id == driver_id)
+                .min_by(|a, b| {
+                    (a.at_ms - recorded_at.timestamp_millis())
+                        .abs()
+                        .cmp(&(b.at_ms - recorded_at.timestamp_millis()).abs())
+                })
+                .map(|s| s.id.clone())
+                .unwrap_or_default();
+
             let review = GpsReview {
                 id: Uuid::new_v4().to_string(),
                 tenant_id: org.to_string(),
                 hub_id: hub_id.clone(),
                 driver_id: driver_id.clone(),
                 vehicle_id: Some(plate.to_string()),
-                app_observation_id: obs.id.clone(),
+                app_observation_id,
                 vehicle_observation_id: Some(obs.id),
                 classification: match result.flag {
                     AnomalyFlag::None => GpsReviewClassification::Consistent,
@@ -284,6 +324,7 @@ impl MceasyWorker {
 }
 
 struct ParsedObservation {
+    id: String,
     driver_id: String,
     coord: Coordinate,
     at_ms: i64,
@@ -309,6 +350,11 @@ fn observations_to_samples(obs: &[Value]) -> anyhow::Result<Vec<ParsedObservatio
             .map(|d| d.with_timezone(&Utc));
         let at_ms = at.map(|d| d.timestamp_millis()).unwrap_or(0);
         out.push(ParsedObservation {
+            id: obs
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
             driver_id: obs
                 .get("user-sub")
                 .and_then(Value::as_str)

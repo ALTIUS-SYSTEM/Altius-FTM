@@ -358,7 +358,8 @@ async fn drive(
                 name: Some(call.function.name.clone()),
             });
         }
-        for (_, call) in in_budget {
+        let mut iter = in_budget.into_iter();
+        while let Some((_, call)) = iter.next() {
             let tool = tools.iter().find(|t| t.name == call.function.name);
             let Some(tool) = tool else {
                 messages.push(Message {
@@ -371,6 +372,25 @@ async fn drive(
                 continue;
             };
 
+            let mut pause = |messages: &mut Vec<Message>, pending: &ToolCall| {
+                // The assistant message already lists every call in this step;
+                // calls after the paused one still need a tool result or the
+                // resumed transcript is malformed for the next upstream turn.
+                while let Some((_, rest)) = iter.next() {
+                    messages.push(Message {
+                        role: "tool".into(),
+                        content: Some(
+                            json!({"error": "tool call skipped: earlier call awaits approval"})
+                                .to_string(),
+                        ),
+                        tool_calls: None,
+                        tool_call_id: Some(rest.id.clone()),
+                        name: Some(rest.function.name.clone()),
+                    });
+                }
+                seal(secret, subject, messages, pending, remaining)
+            };
+
             if tool.gated {
                 let args: Value =
                     serde_json::from_str(&call.function.arguments).unwrap_or(json!({}));
@@ -379,7 +399,7 @@ async fn drive(
                     name: tool.name.to_string(),
                     arguments: args,
                 };
-                let state = seal(secret, subject, messages, &pending, remaining)?;
+                let state = pause(messages, &pending)?;
                 return Ok(AgentRun::AwaitingApproval {
                     call: pending,
                     state,
@@ -396,7 +416,7 @@ async fn drive(
                         name: tool.name.to_string(),
                         arguments: args,
                     };
-                    let state = seal(secret, subject, messages, &pending, remaining)?;
+                    let state = pause(messages, &pending)?;
                     return Ok(AgentRun::AwaitingApproval {
                         call: pending,
                         state,
