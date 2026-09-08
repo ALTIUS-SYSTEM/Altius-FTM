@@ -56,6 +56,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _issuer = TextEditingController();
   final _clientId = TextEditingController();
   final _redirectUri = TextEditingController();
+  final _username = TextEditingController();
+  final _password = TextEditingController();
   bool _busy = false;
 
   static const _defaultApiBase = String.fromEnvironment('API_BASE', defaultValue: '');
@@ -114,13 +116,9 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         const SizedBox(height: 28),
         if (livePrimary || _wantsKeycloak) ...[
-          TextField(controller: _apiBase, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'API base URL', hintText: 'https://api.altius.example'), onChanged: (_) { cubit.store.saveDraft('apiBase', _apiBase.text); setState(() {}); }),
+          TextField(controller: _username, keyboardType: TextInputType.emailAddress, autocorrect: false, decoration: const InputDecoration(labelText: 'Email', hintText: 'admin@altiussystem.com')),
           const SizedBox(height: 14),
-          TextField(controller: _issuer, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'Keycloak issuer', hintText: 'https://keycloak.altius.example/realms/altius'), onChanged: (_) { cubit.store.saveDraft('issuer', _issuer.text); setState(() {}); }),
-          const SizedBox(height: 14),
-          TextField(controller: _clientId, decoration: const InputDecoration(labelText: 'Client ID', hintText: 'altius-mobile'), onChanged: (_) { cubit.store.saveDraft('clientId', _clientId.text); setState(() {}); }),
-          const SizedBox(height: 14),
-          TextField(controller: _redirectUri, decoration: const InputDecoration(labelText: 'Redirect URI', hintText: 'com.altius.altiusfield:/oauthredirect'), onChanged: (_) => cubit.store.saveDraft('redirectUri', _redirectUri.text)),
+          TextField(controller: _password, obscureText: true, decoration: const InputDecoration(labelText: 'Password')),
           const SizedBox(height: 10),
         ],
         Align(alignment: Alignment.centerLeft, child: TextButton(
@@ -139,7 +137,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   clientId: _clientId.text.trim(),
                   redirectUri: _redirectUri.text.trim(),
                 );
-                await cubit.store.signInWithKeycloak();
+                await cubit.store.signInWithPassword(
+                  _username.text.trim(),
+                  _password.text,
+                );
               } else {
                 await cubit.store.enterDemoWorkspace();
               }

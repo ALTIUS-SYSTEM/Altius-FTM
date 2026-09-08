@@ -339,6 +339,18 @@ class WorkStore {
   /// Authenticate with Keycloak PKCE and hydrate the workspace from the API.
   Future<void> signInWithKeycloak() async {
     final token = await _auth.login();
+    await _hydrateAfterLogin(token);
+  }
+
+  /// In-app login: password grant straight to the token endpoint — no
+  /// browser round-trip. Hydrates the workspace the same way as PKCE.
+  Future<void> signInWithPassword(String username, String password) async {
+    final token = await _auth.loginWithPassword(username, password);
+    await _hydrateAfterLogin(token);
+  }
+
+  /// Shared post-login hydration: fetch profile + tasks, persist session.
+  Future<void> _hydrateAfterLogin(String token) async {
     final base = await _auth.apiBase();
     if (base == null || base.isEmpty) throw StateError('serverError');
     final client = HttpClient();

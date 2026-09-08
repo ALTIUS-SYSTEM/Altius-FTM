@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter_appauth/flutter_appauth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -79,6 +80,62 @@ class AuthService {
     }
     await _secure.write(key: 'session', value: 'true');
     return result.accessToken!;
+  }
+
+  /// In-app login: resource-owner password grant straight to the token
+  /// endpoint — no browser round-trip. Stores the same keys as [login].
+  Future<String> loginWithPassword(String username, String password) async {
+    final issuer = await _readConfig(_kIssuer, _legacyIssuer);
+    final clientId = await _readConfig(_kClientId, _legacyClientId);
+    if (issuer == null || issuer.isEmpty || clientId == null || clientId.isEmpty) {
+      throw StateError('authConfigMissing');
+    }
+    if (username.isEmpty || password.isEmpty) {
+      throw StateError('authConfigMissing');
+    }
+
+    final client = HttpClient();
+    try {
+      final req = await client.postUrl(
+        Uri.parse('$issuer/protocol/openid-connect/token'),
+      );
+      req.headers.set('content-type', 'application/x-www-form-urlencoded');
+      req.write(Uri(queryParameters: {
+        'grant_type': 'password',
+        'client_id': clientId,
+        'username': username,
+        'password': password,
+        'scope': 'openid profile email',
+      }).query);
+      final res = await req.close().timeout(const Duration(seconds: 15));
+      final body = await res.transform(utf8.decoder).join();
+      if (res.statusCode == 401 || res.statusCode == 400) {
+        throw StateError('unauthorized');
+      }
+      if (res.statusCode != 200) throw StateError('serverError');
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final accessToken = data['access_token'] as String?;
+      if (accessToken == null) throw StateError('unauthorized');
+
+      await _secure.write(key: 'accessToken', value: accessToken);
+      final refreshToken = data['refresh_token'] as String?;
+      if (refreshToken != null) {
+        await _secure.write(key: 'refreshToken', value: refreshToken);
+      }
+      final idToken = data['id_token'] as String?;
+      if (idToken != null) {
+        await _secure.write(key: 'idToken', value: idToken);
+      }
+      final expiresIn = data['expires_in'] as int?;
+      if (expiresIn != null) {
+        final at = DateTime.now().toUtc().add(Duration(seconds: expiresIn));
+        await _secure.write(key: 'accessTokenExpiresAt', value: at.toIso8601String());
+      }
+      await _secure.write(key: 'session', value: 'true');
+      return accessToken;
+    } finally {
+      client.close();
+    }
   }
 
   /// Refresh the access token if a refresh token is stored.
