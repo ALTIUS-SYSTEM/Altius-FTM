@@ -7,16 +7,21 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
-      # dev-file (H2) is fine locally. For production durability add to .env:
-      #   KC_DB=postgres
-      #   KC_DB_URL=jdbc:postgresql://postgres:5432/altius
-      #   KC_DB_USERNAME / KC_DB_PASSWORD (reuse POSTGRES_USER/PASSWORD)
-      # Keycloak rejects empty KC_DB_* values, so they stay unset here and
-      # are passed through only when provided.
-      KC_DB: ${KC_DB:-dev-file}
-      KC_DB_URL: ${KC_DB_URL-jdbc:postgresql://postgres:5432/altius}
-      KC_DB_USERNAME: ${KC_DB_USERNAME-${POSTGRES_USER:-altius}}
-      KC_DB_PASSWORD: ${KC_DB_PASSWORD-${POSTGRES_PASSWORD:-altius}}
+      # Postgres, not H2, in every environment.
+      #
+      # `dev-file` was the old default, and it was broken two ways: KC_DB_URL
+      # still resolved to a postgres JDBC URL (the `-` fallback substitutes on
+      # unset, so it was never actually absent) and the H2 driver rejected it,
+      # so the container never became healthy and `api`/`caddy` never started.
+      # H2 also wrote to /opt/keycloak/data, which is not a volume — every
+      # realm change vanished on container recreation.
+      #
+      # Keycloak gets its OWN database (deploy/postgres/10-keycloak-db.sh) so
+      # its Liquibase migrations never meet the API's refinery migrations.
+      KC_DB: ${KC_DB:-postgres}
+      KC_DB_URL: ${KC_DB_URL:-jdbc:postgresql://postgres:5432/${KC_POSTGRES_DB:-keycloak}}
+      KC_DB_USERNAME: ${KC_DB_USERNAME:-${POSTGRES_USER:-altius}}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:-${POSTGRES_PASSWORD:-altius}}
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
       KC_HOSTNAME_STRICT: "false"
@@ -27,14 +32,25 @@ services:
       KC_HTTP_ENABLED: "true"
     volumes:
       - ./deploy/keycloak:/opt/keycloak/data/import:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
     # localhost-only: local browsers hit it for PKCE; on a VPS all public
     # traffic goes through Caddy /realms/* and the admin console is reached
     # via SSH tunnel — never exposed on a public interface in cleartext.
     ports:
       - "127.0.0.1:8081:8081"
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8081 && echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      # Port 9000, not 8081: Keycloak 25+ serves /health/* on the separate
+      # management interface. Probing 8081 returns 404, so the container never
+      # went healthy and `api` + `caddy` never started behind it.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && cat <&3 | grep -q '200 OK'"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -54,6 +70,11 @@ services:
       retries: 5
       start_period: 60s
     restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   postgres:
     image: postgres:17-alpine
@@ -63,6 +84,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-altius}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # First-init only: creates the `keycloak` database alongside `altius`.
+      - ./deploy/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-altius} -d ${POSTGRES_DB:-altius}"]
       interval: 10s
@@ -70,6 +93,11 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   api:
     build:
@@ -105,7 +133,13 @@ services:
       DEFAULT_ORG_NAME: ${DEFAULT_ORG_NAME:-Altius}
       DEFAULT_HUB_ID: ${DEFAULT_HUB_ID:-jakarta}
       DEFAULT_HUB_NAME: ${DEFAULT_HUB_NAME:-Jakarta}
-      DEFAULT_ADMIN_SUB: ${DEFAULT_ADMIN_SUB:-admin}
+      # Must be the Keycloak user's `sub` — a UUID — not a username. The API
+      # resolves tenancy by matching the JWT `sub` against `user_orgs`, so
+      # "admin" matched no real user and every business endpoint answered 403
+      # to a correctly authenticated admin. This default is the pinned id of the
+      # `admin` user in deploy/keycloak/altius-realm.json. In production set it
+      # to your real admin's sub (Keycloak console -> Users -> the user -> ID).
+      DEFAULT_ADMIN_SUB: ${DEFAULT_ADMIN_SUB:-11111111-1111-4111-8111-111111111111}
       # Maps: absent key = offline solver, no static maps.
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
       GOOGLE_ROUTE_MODE: ${GOOGLE_ROUTE_MODE:-directions}
@@ -123,6 +157,11 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
     restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     # localhost-only: local curl/mobile hit :8080 directly; on a VPS public
@@ -154,13 +193,25 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      # Unset = only the :80 block answers, no TLS provisioning attempted.
-      ALTIUS_DOMAIN: ${ALTIUS_DOMAIN:-}
+      # Must never be EMPTY. Caddy's `{$VAR:default}` falls back only when the
+      # variable is UNSET, so an empty value produced a site block with no key
+      # — which Caddy reads as a global options block and refuses to load.
+      # The default is inert two ways: no host is ever `localhost.invalid`, so
+      # the block never matches real traffic, and the explicit `http://` scheme
+      # turns automatic HTTPS off for it, so Caddy contacts no ACME server.
+      # A bare `localhost` would have matched local requests and 308'd them all
+      # to https; a bare `localhost.invalid` would have tried to get a cert.
+      ALTIUS_DOMAIN: ${ALTIUS_DOMAIN:-http://localhost.invalid}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
     security_opt: ["no-new-privileges:true"]
     depends_on:
       api:
@@ -186,6 +237,11 @@ services:
         NEXT_PUBLIC_KEYCLOAK_REALM: ${NEXT_PUBLIC_KEYCLOAK_REALM:-altius}
         NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: ${NEXT_PUBLIC_KEYCLOAK_CLIENT_ID:-altius-web}
     restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
     read_only: true
     tmpfs: [/tmp]
     security_opt: ["no-new-privileges:true"]
@@ -201,6 +257,11 @@ services:
         # Browser-reachable dashboard origin (host ports). Not the Docker service name.
         NEXT_PUBLIC_WEB_APP_URL: ${NEXT_PUBLIC_WEB_APP_URL:-http://127.0.0.1:3000}
     restart: unless-stopped
+    # Docker's json-file driver is unbounded by default: a busy API fills the
+    # host disk with logs until every container on it fails. Cap and rotate.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
     read_only: true
     tmpfs: [/tmp]
     security_opt: ["no-new-privileges:true"]

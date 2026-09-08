@@ -21,7 +21,7 @@
 
 1. Obtain tokens from **Keycloak** (authorization code + PKCE).
    - Web client: `altius-web`
-   - Mobile client: `altius-mobile` (redirect `com.altius.altius_field:/oauthredirect`)
+   - Mobile client: `altius-mobile` (redirect `com.altius.altiusfield:/oauthredirect`)
 2. Call the API with:
 
 ```http

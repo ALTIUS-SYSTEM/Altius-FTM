@@ -11,16 +11,35 @@
   "bruteForceProtected": true,
   "roles": {
     "realm": [
-      { "name": "super-admin", "description": "Platform super admin" },
-      { "name": "admin", "description": "Organization admin" },
-      { "name": "supervisor", "description": "Hub supervisor" },
-      { "name": "lead", "description": "Team lead" },
-      { "name": "driver", "description": "Field driver" },
-      { "name": "integration", "description": "Machine-to-machine service account (read allowlist)" }
+      {
+        "name": "super-admin",
+        "description": "Platform super admin"
+      },
+      {
+        "name": "admin",
+        "description": "Organization admin"
+      },
+      {
+        "name": "supervisor",
+        "description": "Hub supervisor"
+      },
+      {
+        "name": "lead",
+        "description": "Team lead"
+      },
+      {
+        "name": "driver",
+        "description": "Field driver"
+      },
+      {
+        "name": "integration",
+        "description": "Machine-to-machine service account (read allowlist)"
+      }
     ]
   },
   "users": [
     {
+      "id": "11111111-1111-4111-8111-111111111111",
       "username": "admin",
       "enabled": true,
       "email": "admin@altius.local",
@@ -28,11 +47,18 @@
       "firstName": "Altius",
       "lastName": "Admin",
       "credentials": [
-        { "type": "password", "value": "changeme", "temporary": false }
+        {
+          "type": "password",
+          "value": "changeme",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["admin"]
+      "realmRoles": [
+        "admin"
+      ]
     },
     {
+      "id": "22222222-2222-4222-8222-222222222222",
       "username": "driver",
       "enabled": true,
       "email": "driver@altius.local",
@@ -40,16 +66,24 @@
       "firstName": "Demo",
       "lastName": "Driver",
       "credentials": [
-        { "type": "password", "value": "changeme", "temporary": false }
+        {
+          "type": "password",
+          "value": "changeme",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["driver"]
+      "realmRoles": [
+        "driver"
+      ]
     },
     {
       "username": "service-account-altius-integration",
       "enabled": true,
       "emailVerified": false,
       "serviceAccountClientId": "altius-integration",
-      "realmRoles": ["integration"]
+      "realmRoles": [
+        "integration"
+      ]
     }
   ],
   "clients": [
@@ -111,7 +145,9 @@
       "redirectUris": [
         "com.altius.altiusfield:/oauthredirect"
       ],
-      "webOrigins": ["+"],
+      "webOrigins": [
+        "+"
+      ],
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,

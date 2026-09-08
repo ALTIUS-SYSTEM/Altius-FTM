@@ -98,8 +98,12 @@
 	import routes
 }
 
-# Public deployment. Unset ALTIUS_DOMAIN and this block never matches.
-{$ALTIUS_DOMAIN:localhost.invalid} {
+# Public deployment. Set ALTIUS_DOMAIN to the public hostname and Caddy
+# provisions TLS for it automatically. The default matches no real Host
+# and its `http://` scheme keeps automatic HTTPS off, so nothing is
+# provisioned. It must never expand to an empty string — an empty site
+# key reads as a global options block and Caddy refuses to load.
+{$ALTIUS_DOMAIN:http://localhost.invalid} {
 	import security_headers
 	import routes
 }
