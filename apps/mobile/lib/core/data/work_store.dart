@@ -432,18 +432,46 @@ class WorkStore {
             }
             final decoded = jsonDecode(body) as Map<String, dynamic>;
             final receipts = (decoded['data'] as List?) ?? const [];
-            for (var i = 0; i < receipts.length && i < syncable.length; i++) {
-              final r = receipts[i] as Map<String, dynamic>;
-              final status = r['status'] == 'accepted' ? 'accepted' : 'rejected';
+            // Match receipts by identity, never by array position. A reordered,
+            // truncated or fabricated response would otherwise stamp one event's
+            // delivery status onto another — and a row that leaves 'pending' is
+            // never retried, so that is permanent loss of proof-of-service.
+            final sent = {for (final e in syncable) e.id: e};
+            final seen = <String>{};
+            for (final entry in receipts) {
+              if (entry is! Map<String, dynamic>) continue;
+              final id = entry['event_id'] ?? entry['server_event_id'];
+              if (id is! String || !sent.containsKey(id)) continue;
+              // Only the statuses the contract defines are terminal. Anything
+              // unrecognised ('retry', a missing key, a partial response) stays
+              // pending so the event is resent, rather than being silently
+              // dropped as 'rejected'.
+              final raw = entry['status'];
+              final status = raw == 'accepted'
+                  ? 'accepted'
+                  : raw == 'rejected'
+                      ? 'rejected'
+                      : null;
+              if (status == null) continue;
+              seen.add(id);
               await _db.customStatement(
                 'UPDATE events SET delivery = ? WHERE id = ?',
-                [status, syncable[i].id],
+                [status, id],
               );
+            }
+            // An event we sent but heard nothing about is still pending, not
+            // delivered. Surface the shortfall instead of reporting a clean run.
+            if (seen.length != syncable.length) {
+              await _pref('syncError', 'partial');
             }
           } finally {
             client.close();
           }
-          await _pref('syncError', '');
+          if (await preference('syncError') == 'partial') {
+            // Keep the partial marker; do not report success.
+          } else {
+            await _pref('syncError', '');
+          }
         } on Object {
           if (await preference('syncError') == '') {
             await _pref('syncError', 'transport');
