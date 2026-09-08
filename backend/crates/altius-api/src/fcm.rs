@@ -242,3 +242,57 @@ fn extract_error(inner: &str) -> String {
         .unwrap_or("unknown fcm error")
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn body_start_crlf_uses_offset_four() {
+        let part = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"name\":\"projects/p/messages/1\"}";
+        let start = body_start(part).unwrap();
+        assert_eq!(&part[start..], "{\"name\":\"projects/p/messages/1\"}");
+        assert_eq!(
+            parse_success_name(part).as_deref(),
+            Some("projects/p/messages/1")
+        );
+    }
+
+    #[test]
+    fn body_start_lf_fallback_uses_offset_two() {
+        // Bare LF separators: +4 would slice into the JSON and break parsing.
+        let part = "HTTP/1.1 200 OK\nContent-Type: application/json\n\n{\"name\":\"projects/p/messages/2\"}";
+        let start = body_start(part).unwrap();
+        assert_eq!(&part[start..], "{\"name\":\"projects/p/messages/2\"}");
+        assert_eq!(
+            parse_success_name(part).as_deref(),
+            Some("projects/p/messages/2")
+        );
+    }
+
+    #[test]
+    fn extract_error_reads_json_after_lf_separator() {
+        let part = "HTTP/1.1 400 Bad Request\n\n{\"error\":{\"code\":400,\"message\":\"Invalid token\"}}";
+        assert_eq!(extract_error(part), "Invalid token");
+    }
+
+    #[test]
+    fn parse_batch_response_pairs_tokens_with_lf_parts() {
+        let boundary = "bnd";
+        let body = format!(
+            "--{boundary}\nContent-Type: application/http\n\n\
+             HTTP/1.1 200 OK\n\n{{\"name\":\"msg/a\"}}\n\
+             --{boundary}\nContent-Type: application/http\n\n\
+             HTTP/1.1 400 Bad Request\n\n{{\"error\":{{\"message\":\"boom\"}}}}\n\
+             --{boundary}--"
+        );
+        let tokens = vec!["tok-a".into(), "tok-b".into()];
+        let ct = format!("multipart/mixed; boundary={boundary}");
+        let out = parse_batch_response(&tokens, &ct, body.as_bytes()).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].name.as_deref(), Some("msg/a"));
+        assert!(out[0].error.is_none());
+        assert!(out[1].name.is_none());
+        assert_eq!(out[1].error.as_deref(), Some("boom"));
+    }
+}

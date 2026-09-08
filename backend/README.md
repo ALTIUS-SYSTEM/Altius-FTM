@@ -35,6 +35,21 @@ cargo check --workspace
 cargo test --workspace
 ```
 
+## Stress / load (k6)
+
+HTTP E2E load against a live `/api/v3` (local compose by default):
+
+```bash
+# Health/ready burst (no token)
+ALTIUS_STRESS_SCENARIO=health ./backend/scripts/stress/run.sh
+
+# Authenticated reads — set a local Bearer JWT first
+export ALTIUS_STRESS_TOKEN='…'
+./backend/scripts/stress/run.sh
+```
+
+See [`scripts/stress/README.md`](scripts/stress/README.md). Do not point at production.
+
 ## Endpoints
 
 | Route | Auth | Notes |
@@ -65,5 +80,5 @@ cargo test --workspace
 3. **CORS** — set `CORS_ORIGINS` to the exact dashboard/landing origins (no wildcards).
 4. **Keycloak** — public issuer URLs for browsers; internal `KEYCLOAK_JWKS_URL` / `KEYCLOAK_TOKEN_URL` when containers cannot reach the public host.
 5. **Edge TLS** — set `ALTIUS_DOMAIN` for the Caddy site block (auto ACME). Leave unset for local `:80` only. Caddy `/healthz` is edge liveness; app readiness is `GET /api/v3/ready` (503 when persistence is down).
-6. **Password grant** — keep `ALLOW_PASSWORD_GRANT=false` outside trusted private frontends.
+6. **Password grant** — keep `ALLOW_PASSWORD_GRANT=false` outside trusted private frontends. The flag gates both `/api/v3/auth/login` and `/api/v3/auth/refresh` (the direct IdP token proxy); PKCE web/mobile clients refresh at Keycloak, not via this API.
 7. **Verify** — `curl -f https://$ALTIUS_DOMAIN/api/v3/ready` (or `http://localhost:8080/api/v3/ready` behind compose).

@@ -25,7 +25,7 @@ We aim to acknowledge within 5 business days.
 
 | Layer | Control |
 |---|---|
-| Identity | Keycloak OIDC (PKCE for `altius-web` / `altius-mobile`); API validates Bearer JWTs (RS256, `iss` / `aud` / `exp` / `nbf`) |
+| Identity | Keycloak OIDC (PKCE for `altius-web` / `altius-mobile`); API validates Bearer JWTs (RS256, `iss` / `aud` / `exp` / `nbf`). Direct IdP proxy (`/auth/login` + `/auth/refresh`) stays behind `ALLOW_PASSWORD_GRANT` — PKCE clients talk to Keycloak themselves. |
 | Tenant isolation | Server resolves `org_id` / hub / role from JWT `sub` + membership tables — never from client-asserted tenant alone |
 | Events | Append-only `device_events`; idempotent `request_key` scoped by `(org_id, driver_sub)` |
 | Mobile tokens | `FlutterSecureStorage` / Keychain — not SQLite preferences |

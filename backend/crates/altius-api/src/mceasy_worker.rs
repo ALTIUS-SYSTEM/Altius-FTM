@@ -68,6 +68,7 @@ impl MceasyWorker {
         let vehicles = self.store.monitoring_vehicles(org).await?;
         let users = self.store.users_for_org(org).await?;
 
+        // Lowercase keys so McEasy plate casing cannot miss a local fleet match.
         let by_plate: HashMap<String, _> = vehicles
             .iter()
             .filter_map(|v| extract_str(v, "vehicle", "plate").map(|p| (p.to_lowercase(), v)))
@@ -80,9 +81,15 @@ impl MceasyWorker {
             let Some(mceasy_id) = mv.id.as_deref().or(mv.vehicle_id.as_deref()) else {
                 continue;
             };
-            if by_plate.contains_key(&plate.to_lowercase()) {
-                if let Err(e) = self.store.mceasy_sync_vehicle(org, plate, mceasy_id).await {
-                    tracing::warn!(plate, error = %e, "mceasy vehicle sync failed");
+            // UPDATE must use the local plate string (FK / PK casing), not McEasy's.
+            if let Some(local) = by_plate.get(&plate.to_lowercase()) {
+                let local_plate = extract_str(local, "vehicle", "plate").unwrap_or(plate);
+                if let Err(e) = self
+                    .store
+                    .mceasy_sync_vehicle(org, local_plate, mceasy_id)
+                    .await
+                {
+                    tracing::warn!(plate = local_plate, error = %e, "mceasy vehicle sync failed");
                 }
             } else {
                 tracing::debug!(plate, "mceasy vehicle not matched to local fleet");
@@ -127,9 +134,12 @@ impl MceasyWorker {
         let mut by_plate: HashMap<String, (String, Option<String>)> = HashMap::new();
         for v in &vehicles {
             let plate = extract_str(v, "vehicle", "plate").unwrap_or_default();
-            let mceasy_id = extract_str(v, "vehicle", "mceasy-vehicle-id");
+            let mceasy_id = extract_str(v, "vehicle", "mceasy_vehicle_id")
+                .or_else(|| extract_str(v, "vehicle", "mceasy-vehicle-id"));
             if let Some(mid) = mceasy_id {
-                let hub_id = extract_str(v, "hub", "hub-id").unwrap_or_default();
+                let hub_id = extract_str(v, "hub", "id")
+                    .or_else(|| extract_str(v, "hub", "hub-id"))
+                    .unwrap_or_default();
                 by_plate.insert(
                     plate.to_lowercase(),
                     (hub_id.to_string(), Some(mid.to_string())),
@@ -145,8 +155,15 @@ impl MceasyWorker {
             .iter()
             .filter_map(|u| {
                 let user = u.get("user")?;
-                let mceasy_id = user.get("mceasy_driver_id").and_then(Value::as_str)?;
-                let sub = user.get("sub").and_then(Value::as_str)?;
+                let mceasy_id = user
+                    .get("mceasy_driver_id")
+                    .or_else(|| user.get("mceasy-driver-id"))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())?;
+                let sub = user
+                    .get("sub")
+                    .or_else(|| user.get("user-sub"))
+                    .and_then(Value::as_str)?;
                 Some((mceasy_id.to_string(), sub.to_string()))
             })
             .collect();
@@ -196,7 +213,8 @@ impl MceasyWorker {
                         .iter()
                         .find(|(_, (_, mid))| mid.as_deref() == pos.vehicle_id.as_deref())
                         .map(|(p, _)| p.clone())
-                }) else {
+                })
+            else {
                 continue;
             };
             let Some((hub_id, _)) = by_plate.get(&plate) else {
@@ -216,8 +234,9 @@ impl MceasyWorker {
                 .unwrap_or(mceasy_driver);
             let recorded_at = pos.recorded_at.unwrap_or_else(Utc::now);
 
+            let vehicle_obs_id = Uuid::new_v4().to_string();
             let obs = GpsObservation {
-                id: Uuid::new_v4().to_string(),
+                id: vehicle_obs_id.clone(),
                 tenant_id: org.to_string(),
                 hub_id: hub_id.clone(),
                 driver_id: driver_id.clone(),
@@ -252,9 +271,12 @@ impl MceasyWorker {
                 at: recorded_at.timestamp_millis() as f64,
                 accuracy_meters: None,
             }];
-            let app_for_driver: Vec<GeoSample> = app_samples
+            let app_for_driver: Vec<&ParsedObservation> = app_samples
                 .iter()
                 .filter(|s| s.driver_id == driver_id)
+                .collect();
+            let app_geo: Vec<GeoSample> = app_for_driver
+                .iter()
                 .map(|s| GeoSample {
                     lat: s.coord.lat,
                     lng: s.coord.lng,
@@ -264,7 +286,7 @@ impl MceasyWorker {
                 .collect();
 
             let result = compare_gps_streams(
-                &app_for_driver,
+                &app_geo,
                 &vehicle_samples,
                 CompareOpts {
                     max_time_gap_ms: 60_000.0,
@@ -275,9 +297,8 @@ impl MceasyWorker {
             // The review cites the app observation closest in time to the
             // vehicle fix — not the vehicle observation itself, which is what
             // `vehicle_observation_id` is for.
-            let app_observation_id = app_samples
+            let app_observation_id = app_for_driver
                 .iter()
-                .filter(|s| s.driver_id == driver_id)
                 .min_by(|a, b| {
                     (a.at_ms - recorded_at.timestamp_millis())
                         .abs()
@@ -293,7 +314,7 @@ impl MceasyWorker {
                 driver_id: driver_id.clone(),
                 vehicle_id: Some(plate.to_string()),
                 app_observation_id,
-                vehicle_observation_id: Some(obs.id),
+                vehicle_observation_id: Some(vehicle_obs_id),
                 classification: match result.flag {
                     AnomalyFlag::None => GpsReviewClassification::Consistent,
                     AnomalyFlag::Review => GpsReviewClassification::ReviewRequired,
@@ -337,32 +358,48 @@ fn observations_to_samples(obs: &[Value]) -> anyhow::Result<Vec<ParsedObservatio
         let obs = o
             .get("observation")
             .ok_or_else(|| anyhow::anyhow!("missing observation"))?;
-        let lat = obs.get("latitude").and_then(Value::as_f64);
-        let lng = obs.get("longitude").and_then(Value::as_f64);
+        // Postgres `row_to_json` uses snake_case; TypeDB fetch uses kebab attributes.
+        let lat = obs
+            .get("lat")
+            .or_else(|| obs.get("latitude"))
+            .and_then(Value::as_f64);
+        let lng = obs
+            .get("lng")
+            .or_else(|| obs.get("longitude"))
+            .and_then(Value::as_f64);
         let (lat, lng) = match (lat, lng) {
             (Some(lat), Some(lng)) => (lat, lng),
             _ => continue,
         };
         let at = obs
-            .get("recorded-at-utc")
-            .and_then(Value::as_str)
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|d| d.with_timezone(&Utc));
+            .get("recorded_at")
+            .or_else(|| obs.get("recorded-at-utc"))
+            .and_then(|v| match v {
+                Value::String(s) => DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|d| d.with_timezone(&Utc)),
+                _ => None,
+            });
         let at_ms = at.map(|d| d.timestamp_millis()).unwrap_or(0);
         out.push(ParsedObservation {
             id: obs
                 .get("id")
+                .or_else(|| obs.get("observation-id"))
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
             driver_id: obs
-                .get("user-sub")
+                .get("driver_sub")
+                .or_else(|| obs.get("user-sub"))
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
             coord: Coordinate { lat, lng },
             at_ms,
-            accuracy: obs.get("accuracy-meters").and_then(Value::as_f64),
+            accuracy: obs
+                .get("accuracy_meters")
+                .or_else(|| obs.get("accuracy-meters"))
+                .and_then(Value::as_f64),
         });
     }
     Ok(out)
@@ -388,26 +425,25 @@ fn find_user_for_driver(md: &MceasyDriver, users: &[Value]) -> Option<String> {
     for u in users {
         let user = u.get("user")?;
         let name = user
-            .get("display-name")
+            .get("display_name")
+            .or_else(|| user.get("display-name"))
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_lowercase();
         let email = user
-            .get("user-sub")
+            .get("email")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_lowercase();
+        let sub = user
+            .get("sub")
+            .or_else(|| user.get("user-sub"))
+            .and_then(Value::as_str)?;
         if !target_name.is_empty() && name == target_name {
-            return user
-                .get("user-sub")
-                .and_then(Value::as_str)
-                .map(String::from);
+            return Some(sub.to_string());
         }
         if !target_email.is_empty() && email == target_email {
-            return user
-                .get("user-sub")
-                .and_then(Value::as_str)
-                .map(String::from);
+            return Some(sub.to_string());
         }
     }
     None
@@ -415,4 +451,47 @@ fn find_user_for_driver(md: &MceasyDriver, users: &[Value]) -> Option<String> {
 
 fn extract_str<'a>(v: &'a Value, outer: &str, inner: &str) -> Option<&'a str> {
     v.get(outer)?.get(inner)?.as_str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn observations_to_samples_reads_postgres_row_to_json() {
+        let rows = vec![json!({
+            "observation": {
+                "id": "app-1",
+                "driver_sub": "sub-driver",
+                "lat": -6.2,
+                "lng": 106.8,
+                "accuracy_meters": 12.0,
+                "recorded_at": "2026-09-08T10:00:00+00:00"
+            }
+        })];
+        let samples = observations_to_samples(&rows).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].id, "app-1");
+        assert_eq!(samples[0].driver_id, "sub-driver");
+        assert!((samples[0].coord.lat - (-6.2)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn observations_to_samples_reads_typedb_kebab_attrs() {
+        let rows = vec![json!({
+            "observation": {
+                "observation-id": "app-2",
+                "user-sub": "sub-2",
+                "latitude": -6.3,
+                "longitude": 106.9,
+                "accuracy-meters": 5.0,
+                "recorded-at-utc": "2026-09-08T11:00:00.000+00:00"
+            }
+        })];
+        let samples = observations_to_samples(&rows).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].id, "app-2");
+        assert_eq!(samples[0].driver_id, "sub-2");
+    }
 }

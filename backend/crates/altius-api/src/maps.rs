@@ -260,23 +260,23 @@ impl MapsClient {
         // as *intermediate* stops, so including it there would visit it twice
         // and pollute `waypoint_order`.
         let (dest_pt, intermediates) = waypoints.split_last().unwrap();
-        let wp = intermediates
-            .iter()
-            .map(|p| format!("{},{}", p.lat, p.lng))
-            .collect::<Vec<_>>()
-            .join("|");
         let dest = format!("{},{}", dest_pt.lat, dest_pt.lng);
-        let res: DirectionsResponse = self
-            .get(
-                DIRECTIONS_URL,
-                &[
-                    ("origin", format!("{},{}", origin.lat, origin.lng)),
-                    ("destination", dest),
-                    ("waypoints", format!("optimize:true|{wp}")),
-                    ("key", self.key()?.to_string()),
-                ],
-            )
-            .await?;
+        let mut params = vec![
+            ("origin", format!("{},{}", origin.lat, origin.lng)),
+            ("destination", dest),
+            ("key", self.key()?.to_string()),
+        ];
+        // Omit `waypoints` when the only stop is the destination — an empty
+        // `optimize:true|` confuses Directions and is unnecessary.
+        if !intermediates.is_empty() {
+            let wp = intermediates
+                .iter()
+                .map(|p| format!("{},{}", p.lat, p.lng))
+                .collect::<Vec<_>>()
+                .join("|");
+            params.insert(2, ("waypoints", format!("optimize:true|{wp}")));
+        }
+        let res: DirectionsResponse = self.get(DIRECTIONS_URL, &params).await?;
         if res.status != "OK" {
             return Err(ApiError::Unavailable(format!("directions: {}", res.status)));
         }
@@ -292,19 +292,24 @@ impl MapsClient {
                 // append the destination last.
                 let o = &route.waypoint_order;
                 let n_intermediate = waypoints.len() - 1;
-                let in_range = o.iter().all(|&i| i < n_intermediate);
-                let unique = o.iter().collect::<std::collections::HashSet<_>>().len() == o.len();
-                if o.len() == n_intermediate && in_range && unique {
-                    let mut order = o.clone();
-                    order.push(waypoints.len() - 1);
-                    order
+                if n_intermediate == 0 {
+                    vec![0]
                 } else {
-                    tracing::warn!(
-                        got = o.len(),
-                        want = n_intermediate,
-                        "maps returned an unusable waypoint_order; falling back to input order"
-                    );
-                    (0..waypoints.len()).collect()
+                    let in_range = o.iter().all(|&i| i < n_intermediate);
+                    let unique =
+                        o.iter().collect::<std::collections::HashSet<_>>().len() == o.len();
+                    if o.len() == n_intermediate && in_range && unique {
+                        let mut order = o.clone();
+                        order.push(waypoints.len() - 1);
+                        order
+                    } else {
+                        tracing::warn!(
+                            got = o.len(),
+                            want = n_intermediate,
+                            "maps returned an unusable waypoint_order; falling back to input order"
+                        );
+                        (0..waypoints.len()).collect()
+                    }
                 }
             },
             leg_seconds: route.legs.iter().map(|l| l.duration.value).collect(),
