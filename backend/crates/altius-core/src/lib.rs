@@ -9,6 +9,10 @@ pub mod gps;
 pub type Id = String;
 
 /// Workspace roles — match Keycloak realm roles.
+///
+/// `Integration` marks machine-to-machine service accounts (Keycloak
+/// `client_credentials`), not people: it gates org-scoped read routes and
+/// nothing else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -17,6 +21,7 @@ pub enum Role {
     Supervisor,
     Lead,
     Driver,
+    Integration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

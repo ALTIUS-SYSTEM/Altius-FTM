@@ -245,9 +245,16 @@ impl<'a> AdminClient<'a> {
     }
 }
 
-/// Realm roles this API understands and therefore manages.
-#[allow(dead_code)]
-pub const MANAGED_ROLES: [&str; 5] = ["super-admin", "admin", "supervisor", "lead", "driver"];
+/// Realm roles this API understands and therefore manages. `integration` is
+/// for service accounts, not people — `create_user` should not offer it.
+pub const MANAGED_ROLES: [&str; 6] = [
+    "super-admin",
+    "admin",
+    "supervisor",
+    "lead",
+    "driver",
+    "integration",
+];
 
 /// One-time password from the OS CSPRNG (uuid v4 is CSPRNG-backed).
 fn temporary_password() -> String {

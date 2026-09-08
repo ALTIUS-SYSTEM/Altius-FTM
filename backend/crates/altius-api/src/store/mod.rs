@@ -35,6 +35,17 @@ impl Store {
         }
     }
 
+    pub async fn tasks_for_driver(
+        &self,
+        org_id: &str,
+        driver_sub: &str,
+    ) -> anyhow::Result<Vec<Value>> {
+        match self {
+            Self::Postgres(s) => s.tasks_for_driver(org_id, driver_sub).await,
+            Self::Typedb(s) => s.tasks_for_driver(org_id, driver_sub).await,
+        }
+    }
+
     pub async fn task_by_id(&self, org_id: &str, task_id: &str) -> anyhow::Result<Option<Value>> {
         match self {
             Self::Postgres(s) => s.task_by_id(org_id, task_id).await,

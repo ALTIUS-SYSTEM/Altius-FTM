@@ -50,13 +50,28 @@ pub(crate) async fn org_of(s: &Arc<AppState>, subject: &str) -> ApiResult<String
         .ok_or(ApiError::Forbidden)
 }
 
+/// True when the principal carries a staff role. Read as a predicate — the
+/// `require_*` gates below build on it.
+pub(crate) fn is_staff(principal: &AuthUser) -> bool {
+    principal.has_role(Role::Admin)
+        || principal.has_role(Role::Supervisor)
+        || principal.has_role(Role::Lead)
+}
+
 /// Gate for org-wide rosters and planning data. A Driver sees their own work,
 /// not the organization's user list, hub list or driver list.
 pub(crate) fn require_staff(principal: &AuthUser) -> ApiResult<()> {
-    if principal.has_role(Role::Admin)
-        || principal.has_role(Role::Supervisor)
-        || principal.has_role(Role::Lead)
-    {
+    if is_staff(principal) {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// Staff plus `integration` service accounts — org-scoped **read** routes a
+/// machine caller may use. Write routes keep `require_staff`.
+pub(crate) fn require_staff_or_integration(principal: &AuthUser) -> ApiResult<()> {
+    if is_staff(principal) || principal.has_role(Role::Integration) {
         Ok(())
     } else {
         Err(ApiError::Forbidden)

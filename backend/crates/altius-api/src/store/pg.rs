@@ -562,17 +562,30 @@ impl PgStore {
             }
         }
 
-        if let Some(loc) = ev.location {
+        // A position without an accuracy reading can't satisfy the contract's
+        // "available ⇒ position + accuracy" rule, so it is not stored as an
+        // observation — the event row itself still carries it in `payload`.
+        if let Some(loc) = ev.location
+            && let Some(accuracy) = ev.accuracy_meters
+        {
             let id = format!("obs:{}", ev.event_id);
-            let quality = match ev.accuracy_meters {
-                Some(a) if a <= 50.0 => GpsQuality::Accurate,
-                Some(_) => GpsQuality::Degraded,
-                None => GpsQuality::Accurate,
+            let quality = if accuracy <= 50.0 {
+                GpsQuality::Accurate
+            } else {
+                GpsQuality::Degraded
             };
             let quality_name = serde_json::to_value(quality)?
                 .as_str()
                 .unwrap_or("accurate")
                 .to_string();
+            // Contract INV-14 requires an explicit mock flag for app GPS with
+            // a position; until the field exists on DeviceEvent, honour the
+            // payload key mobile can already send.
+            let mock = ev
+                .payload
+                .get("mock_location")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             tx.execute(
                 "INSERT INTO gps_observations \
                  (id, org_id, hub_id, driver_sub, plate, source, quality, lat, lng, accuracy_meters, speed_mps, mock_reported, recorded_at, day) \
@@ -587,9 +600,9 @@ impl PgStore {
                     &quality_name,
                     &loc.lat,
                     &loc.lng,
-                    &ev.accuracy_meters,
+                    &accuracy,
                     &None::<f64>,
-                    &None::<bool>,
+                    &mock,
                     &ev.time.utc,
                     &ev.time.utc.date_naive().to_string(),
                 ],

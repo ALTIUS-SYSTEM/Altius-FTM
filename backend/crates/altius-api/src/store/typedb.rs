@@ -124,6 +124,33 @@ impl TypedbStore {
         self.fetch_all(&q).await
     }
 
+    /// Tasks assigned to a specific driver — the `dispatch` relation ties
+    /// task → user. Matches the driver's scoped board on the Postgres path.
+    pub async fn tasks_for_driver(
+        &self,
+        org_id: &str,
+        driver_sub: &str,
+    ) -> anyhow::Result<Vec<Value>> {
+        let q = format!(
+            r#"match
+                allocation (org: $o, hub: $h);
+                $o has org-id "{org}";
+                located (task: $t, hub: $h);
+                dispatch (task: $t, driver: $d);
+                $d has user-sub "{driver}";
+            fetch {{
+                "task": {{ $t.* }},
+                "stops": [
+                    match contains (parent: $t, child: $s);
+                    fetch {{ "stop": {{ $s.* }} }};
+                ]
+            }};"#,
+            org = Self::esc(org_id),
+            driver = Self::esc(driver_sub)
+        );
+        self.fetch_all(&q).await
+    }
+
     pub async fn task_by_id(&self, org_id: &str, task_id: &str) -> anyhow::Result<Option<Value>> {
         let q = format!(
             r#"match

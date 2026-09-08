@@ -138,6 +138,7 @@ impl Jwks {
                 "supervisor" => Some(Role::Supervisor),
                 "lead" => Some(Role::Lead),
                 "driver" => Some(Role::Driver),
+                "integration" => Some(Role::Integration),
                 _ => None,
             })
             .collect();

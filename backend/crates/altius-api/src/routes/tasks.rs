@@ -5,7 +5,7 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
-use super::{AuthUser, org_of, require_staff, store};
+use super::{AuthUser, is_staff, org_of, require_staff, store};
 use crate::AppState;
 use crate::error::{ApiError, ApiResult};
 use crate::maps::{MAX_OPTIMIZE_WAYPOINTS, MapsClient};
@@ -28,10 +28,15 @@ pub fn router() -> Router<Arc<AppState>> {
 
 async fn list_tasks(State(s): State<Arc<AppState>>, principal: AuthUser) -> ApiResult<Json<Value>> {
     let org = org_of(&s, &principal.subject).await?;
-    let tasks = store(&s)?
-        .tasks_for_org(&org)
-        .await
-        .map_err(ApiError::Internal)?;
+    // A driver pulls only their assignments — the mobile board has no claim
+    // flow, so an org-wide list just leaks colleagues' work. Staff and
+    // integration service accounts read the full board.
+    let tasks = if is_staff(&principal) || principal.has_role(Role::Integration) {
+        store(&s)?.tasks_for_org(&org).await
+    } else {
+        store(&s)?.tasks_for_driver(&org, &principal.subject).await
+    }
+    .map_err(ApiError::Internal)?;
     Ok(Json(json!({
         "data": tasks,
         "meta": { "mode": "live", "organization": org }
@@ -44,12 +49,21 @@ async fn get_task(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let org = org_of(&s, &principal.subject).await?;
-    store(&s)?
+    let task = store(&s)?
         .task_by_id(&org, &id)
         .await
-        .map_err(ApiError::Internal)?
-        .map(|t| Json(json!({ "data": t })))
-        .ok_or(ApiError::NotFound)
+        .map_err(ApiError::Internal)?;
+    // Drivers may fetch only their own assignments — same rule as list_tasks.
+    if !is_staff(&principal) && !principal.has_role(Role::Integration) {
+        let assignee = task
+            .as_ref()
+            .and_then(|t| t.pointer("/task/assignee"))
+            .and_then(|a| a.as_str());
+        if assignee != Some(principal.subject.as_str()) {
+            return Err(ApiError::NotFound);
+        }
+    }
+    task.map(|t| Json(json!({ "data": t }))).ok_or(ApiError::NotFound)
 }
 
 async fn create_task(
