@@ -1,4 +1,6 @@
 .desloppify/
+.claude/
+.agents/
 node_modules/
 .next/
 out/

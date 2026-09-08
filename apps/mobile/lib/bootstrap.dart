@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'core/data/work_store.dart';
+import 'core/services/sync_service.dart';
 import 'core/theme/app_theme.dart';
 import 'features/work/work_cubit.dart';
 import 'app.dart';
@@ -9,8 +10,10 @@ Future<void> bootstrap({String environment = 'dev'}) async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     final directory = await getApplicationSupportDirectory();
-    final store = WorkStore.open('${directory.path}/altius_$environment.sqlite', demoWorkspace: environment != 'prod');
+    final store = WorkStore.open('${directory.path}/altius_field.sqlite', demoWorkspace: environment != 'prod');
     await store.initialize();
+    final sync = SyncService(store: store);
+    await sync.start();
     final cubit = WorkCubit(store);
     await cubit.refresh();
     runApp(AltiusApp(cubit: cubit, environment: environment));

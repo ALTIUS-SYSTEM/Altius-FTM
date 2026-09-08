@@ -47,12 +47,17 @@ Uri parseServerUrl(String raw) {
 enum TaskStage { assigned, arrived, working, done }
 
 class FieldTask {
-  const FieldTask(this.id, this.title, this.address, this.stage, this.etaMinutes);
+  const FieldTask(this.id, this.title, this.address, this.stage, this.etaMinutes, {this.lat, this.lng});
   final String id;
   final String title;
   final String address;
   final TaskStage stage;
   final int etaMinutes;
+  /// Stop position from the API. Null for tasks created on-device, which have
+  /// only an address until something geocodes it.
+  final double? lat;
+  final double? lng;
+  bool get isLocated => lat != null && lng != null;
 }
 
 class WorkEvent {
@@ -104,7 +109,7 @@ class DailyReport {
 class _Database extends GeneratedDatabase {
   _Database(super.executor);
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
   @override
   Iterable<TableInfo<Table, Object?>> get allTables => const [];
   @override
@@ -127,6 +132,10 @@ class _Database extends GeneratedDatabase {
         AND OLD.request_key IS NEW.request_key
       ) BEGIN SELECT RAISE(ABORT, 'immutable event'); END""");
   }
+  Future<void> _upgrade4() async {
+    await customStatement('ALTER TABLE tasks ADD COLUMN lat REAL');
+    await customStatement('ALTER TABLE tasks ADD COLUMN lng REAL');
+  }
   @override
   MigrationStrategy get migration => MigrationStrategy(onCreate: (m) async {
     await customStatement('CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, address TEXT NOT NULL, stage INTEGER NOT NULL DEFAULT 0 CHECK(stage BETWEEN 0 AND 3), eta INTEGER NOT NULL)');
@@ -136,9 +145,11 @@ class _Database extends GeneratedDatabase {
     await customStatement('CREATE TABLE reports (day TEXT PRIMARY KEY, total INTEGER NOT NULL, completed INTEGER NOT NULL, visited INTEGER NOT NULL)');
     await _upgrade();
     await _upgrade3();
+    await _upgrade4();
   }, onUpgrade: (m, from, to) async {
     if (from < 2) { await _upgrade(); }
     if (from < 3) { await _upgrade3(); }
+    if (from < 4) { await _upgrade4(); }
   });
 }
 
@@ -256,7 +267,7 @@ class WorkStore {
     await _write(() async {
       await _db.customStatement('DELETE FROM tasks');
       for (final t in tasks) {
-        await _db.customStatement('INSERT OR REPLACE INTO tasks (id,title,address,stage,eta) VALUES (?,?,?,?,?)', t);
+        await _db.customStatement('INSERT OR REPLACE INTO tasks (id,title,address,stage,eta,lat,lng) VALUES (?,?,?,?,?,?,?)', t);
       }
       await _pref('apiBase', base);
       if (subject != null && subject.isNotEmpty) await _pref('driverId', subject);
@@ -264,6 +275,13 @@ class WorkStore {
       if (hub != null && hub.isNotEmpty) await _pref('hub', hub);
       await _pref('session', 'true');
     });
+  }
+
+  /// Coordinates arrive as numbers or numeric strings depending on the shape
+  /// TypeDB fetched. Anything else is absent, not zero — 0,0 is a real place.
+  static double? _finite(Object? v) {
+    final n = v is num ? v.toDouble() : (v is String ? double.tryParse(v) : null);
+    return (n != null && n.isFinite) ? n : null;
   }
 
   List<List<Object?>> _parseTasks(List<Map<String, dynamic>> rows) {
@@ -274,6 +292,8 @@ class WorkStore {
       final stops = (row['stops'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
       String address = '';
       var stage = TaskStage.assigned;
+      double? lat;
+      double? lng;
       if (stops.isNotEmpty) {
         final stop = stops.firstWhere(
           (s) => (s['stage'] as String?) != 'completed' && (s['stage'] as String?) != 'departed' && (s['stage'] as String?) != 'skipped',
@@ -281,9 +301,11 @@ class WorkStore {
         );
         address = stop['address'] as String? ?? '';
         stage = _mapStopStage(stop['stage'] as String? ?? 'pending');
+        lat = _finite(stop['latitude']);
+        lng = _finite(stop['longitude']);
       }
       final eta = (row['eta_minutes'] as num?)?.toInt() ?? (stops.isNotEmpty ? (stops.first['eta_minutes'] as num?)?.toInt() ?? 0 : 0);
-      if (id.isNotEmpty) out.add([id, title, address, stage.index, eta]);
+      if (id.isNotEmpty) out.add([id, title, address, stage.index, eta, lat, lng]);
     }
     return out;
   }
@@ -315,7 +337,11 @@ class WorkStore {
     await _pref('language', value);
   });
   Future<bool> tripActive() async => await preference('trip') == 'active';
-  Future<List<FieldTask>> tasks() async => (await _db.customSelect('SELECT * FROM tasks ORDER BY id').get()).map((r) => FieldTask(r.read<String>('id'), r.read<String>('title'), r.read<String>('address'), TaskStage.values[r.read<int>('stage')], r.read<int>('eta'))).toList();
+  Future<List<FieldTask>> tasks() async => (await _db.customSelect('SELECT * FROM tasks ORDER BY id').get()).map((r) => FieldTask(
+    r.read<String>('id'), r.read<String>('title'), r.read<String>('address'),
+    TaskStage.values[r.read<int>('stage')], r.read<int>('eta'),
+    lat: r.read<double?>('lat'), lng: r.read<double?>('lng'),
+  )).toList();
   Future<List<WorkEvent>> events() async => (await _db.customSelect('SELECT * FROM events ORDER BY rowid').get()).map(WorkEvent.new).toList();
   Future<List<CostEntry>> costs() async => (await _db.customSelect('SELECT * FROM costs ORDER BY rowid').get()).map(CostEntry.new).toList();
   Future<List<DailyReport>> reports() async => (await _db.customSelect('SELECT * FROM reports ORDER BY day DESC').get()).map(DailyReport.new).toList();

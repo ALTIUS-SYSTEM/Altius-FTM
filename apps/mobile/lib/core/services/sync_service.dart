@@ -4,8 +4,8 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:workmanager/workmanager.dart';
 
-import 'package:altius_field/core/data/work_store.dart';
-import 'package:altius_field/core/services/auth_service.dart';
+import '../data/work_store.dart';
+import 'auth_service.dart';
 
 const String _backgroundSyncTask = 'com.altius.altius_field.backgroundSync';
 
@@ -15,15 +15,16 @@ void _callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     if (task == _backgroundSyncTask) {
       try {
-        final dir = await getApplicationDocumentsDirectory();
-        final store = WorkStore.open('${dir.path}/altius_field.db');
+        final dir = await getApplicationSupportDirectory();
+        final store = WorkStore.open('${dir.path}/altius_field.sqlite', demoWorkspace: false);
+        await store.initialize();
         final apiBase = await AuthService().apiBase();
         final token = await AuthService().accessToken();
         if (apiBase != null && token != null) {
           await store.syncNow(baseUrl: apiBase, accessToken: token);
         }
         return true;
-      } catch (e) {
+      } catch (_) {
         return false;
       }
     }
