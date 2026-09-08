@@ -455,6 +455,13 @@ async fn record_report(
     // LHS as `approved` and skip supervisor review entirely.
     req.status = altius_core::LhsStatus::Submitted;
     req.revision = 0;
+    req.driver_id = principal.subject.clone();
+    let (_, hub) = store(&s)?
+        .organization_and_hub_of(&principal.subject)
+        .await
+        .map_err(ApiError::Internal)?
+        .unwrap_or_default();
+    req.hub_id = hub;
     store(&s)?
         .record_daily_report(&req, &principal.subject)
         .await

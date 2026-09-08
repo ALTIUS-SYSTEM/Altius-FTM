@@ -1,10 +1,11 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'core/data/work_store.dart';
 import 'core/l10n/strings.dart';
-import 'core/services/route_demo.dart';
+import 'core/services/route_service.dart';
 import 'core/theme/app_theme.dart';
 import 'features/work/work_cubit.dart';
 
@@ -284,33 +285,94 @@ class TaskDetailScreen extends StatelessWidget {
   }
 }
 
-class RouteTab extends StatelessWidget {
+class RouteTab extends StatefulWidget {
   const RouteTab({super.key});
+  @override
+  State<RouteTab> createState() => _RouteTabState();
+}
+
+class _RouteTabState extends State<RouteTab> {
+  static const _service = RouteService();
+  PlannedRoute? _route;
+  Uint8List? _map;
+  String? _error;
+  bool _busy = false;
+  String _plannedFor = '';
+
+  /// Re-plan when the set of remaining located stops changes, not on every
+  /// rebuild — each plan is two billed Google calls.
+  Future<void> _plan(List<FieldTask> located) async {
+    final key = located.map((t) => t.id).join(',');
+    if (_busy || key == _plannedFor || located.length < 2) return;
+    final store = context.read<WorkCubit>().store;
+    final base = await store.preference('apiBase');
+    final token = await store.accessToken();
+    // No session or no server configured: show the stop list, plan nothing.
+    if (base.isEmpty || token == null || token.isEmpty) return;
+
+    setState(() { _busy = true; _error = null; });
+    final points = [for (final t in located) (lat: t.lat!, lng: t.lng!)];
+    try {
+      final route = await _service.optimize(baseUrl: base, token: token, waypoints: points);
+      final ordered = <({double lat, double lng})>[
+        points.first,
+        for (final i in route.order) if (i + 1 < points.length) points[i + 1],
+      ];
+      final image = await _service.mapImage(
+        baseUrl: base, token: token, markers: ordered, polyline: route.polyline);
+      if (!mounted) return;
+      setState(() { _route = route; _map = image; _plannedFor = key; });
+    } on Object {
+      if (mounted) setState(() => _error = 'routeUnavailable');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<WorkCubit, WorkState>(builder: (context, state) {
-        final s = Strings(state.language);
-      
-      final distance = RouteDemo.shortestMinutes(RouteDemo.graph, 'hub');
+      final s = Strings(state.language);
       final remaining = state.tasks.where((t) => t.stage != TaskStage.done).toList();
+      final located = remaining.where((t) => t.isLocated).toList();
+      final unlocated = remaining.length - located.length;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _plan(located));
+
+      final route = _route;
+      final ordered = route == null
+          ? remaining
+          : <FieldTask>[
+              located.first,
+              for (final i in route.order) if (i + 1 < located.length) located[i + 1],
+            ];
+
       return ListView(padding: const EdgeInsets.all(16), children: [
-        Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: const Color(0xFFEFF4F8), borderRadius: BorderRadius.circular(16)),
-          child: Row(children: [const Icon(Icons.info_outline_rounded, color: AppTheme.teal), const SizedBox(width: 10), Expanded(child: Text(s('schematic'), style: const TextStyle(fontSize: 12)))])),
-        const SizedBox(height: 14),
         Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(s('planned'), style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 10),
-          SizedBox(height: 170, child: CustomPaint(painter: _RoutePainter(), size: Size.infinite)),
-          const SizedBox(height: 8),
-          Text(Strings.fallback['routeBody']!, style: const TextStyle(fontSize: 11, color: Colors.grey, height: 1.5)),
+          if (_busy) const Padding(padding: EdgeInsets.symmetric(vertical: 24), child: Center(child: CircularProgressIndicator()))
+          else if (_map != null) ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.memory(_map!, fit: BoxFit.cover))
+          else Container(height: 120, alignment: Alignment.center,
+            decoration: BoxDecoration(color: const Color(0xFFEFF4F8), borderRadius: BorderRadius.circular(12)),
+            child: Text(s('noMap'), style: const TextStyle(fontSize: 12, color: Colors.grey))),
+          const SizedBox(height: 10),
+          if (_error != null) Text(s(_error!), style: const TextStyle(fontSize: 12, color: AppTheme.amber))
+          else if (route != null) Text(
+            '${route.totalKm.toStringAsFixed(1)} km · ${route.totalMinutes} ${s('min')} · ${s(route.live ? 'roadRouting' : 'straightLine')}',
+            style: const TextStyle(fontSize: 12, height: 1.5))
+          else if (located.length < 2) Text(s('needCoords'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          if (unlocated > 0) Padding(padding: const EdgeInsets.only(top: 6),
+            child: Text('$unlocated ${s('stopsNoPosition')}', style: const TextStyle(fontSize: 11, color: Colors.grey))),
         ]))),
         Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(s('next'), style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
-          if (remaining.isEmpty) Text(s('empty'))
-          else ...remaining.map((t) => ListTile(
-            contentPadding: EdgeInsets.zero, leading: CircleAvatar(radius: 14, backgroundColor: AppTheme.cyan, child: Text('${remaining.indexOf(t) + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.teal))),
-            title: Text(t.title), subtitle: Text('${s('eta')}: ${distance[t.id] ?? t.etaMinutes} ${s('min')} · ${s('ata')}: —'),
+          if (ordered.isEmpty) Text(s('empty'))
+          else ...ordered.asMap().entries.map((e) => ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: CircleAvatar(radius: 14, backgroundColor: AppTheme.cyan, child: Text('${e.key + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.teal))),
+            title: Text(e.value.title),
+            subtitle: Text('${s('eta')}: ${route != null && e.key < route.legMinutes.length ? route.legMinutes[e.key] : e.value.etaMinutes} ${s('min')} · ${s('ata')}: —'),
           )),
         ]))),
         Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -318,37 +380,12 @@ class RouteTab extends StatelessWidget {
           const SizedBox(height: 8),
           Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFFFDF1DF), borderRadius: BorderRadius.circular(12)),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [const Icon(Icons.warning_amber_rounded, color: AppTheme.amber), const SizedBox(width: 10), Expanded(child: Text(Strings.fallback['safetyBody']!, style: const TextStyle(fontSize: 12, height: 1.5)))])),
-          const SizedBox(height: 8),
-          Text(s('noGps'), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
         ]))),
       ]);
     });
   }
 }
 
-class _RoutePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final bg = Paint()..color = const Color(0xFFF5FAFD);
-    canvas.drawRect(Offset.zero & size, bg);
-    final planned = Paint()..color = AppTheme.teal..strokeWidth = 3..style = PaintingStyle.stroke;
-    final simulated = Paint()..color = AppTheme.amber..strokeWidth = 2..style = PaintingStyle.stroke;
-    final p = Path()..moveTo(24, size.height - 24)..lineTo(size.width * .35, size.height * .55)..lineTo(size.width * .62, size.height * .6)..lineTo(size.width * .8, size.height * .3)..lineTo(size.width - 24, size.height * .18);
-    canvas.drawPath(p, planned);
-    final d = Path()..moveTo(24, size.height - 24)..lineTo(size.width * .35, size.height * .55)..lineTo(size.width * .62, size.height * .6)..lineTo(size.width * .78, size.height * .42)..lineTo(size.width - 24, size.height * .18);
-    for (var i = 0.0; i < 1.0; i += 0.06) {
-      final metric = d.computeMetrics().first;
-      final seg = metric.extractPath(metric.length * i, metric.length * (i + 0.03));
-      canvas.drawPath(seg, simulated);
-    }
-    final dot = Paint()..color = AppTheme.cyan;
-    for (final o in [Offset(24, size.height - 24), Offset(size.width * .35, size.height * .55), Offset(size.width * .62, size.height * .6), Offset(size.width * .8, size.height * .3), Offset(size.width - 24, size.height * .18)]) {
-      canvas.drawCircle(o, 6, dot);
-    }
-  }
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
 
 class ReportTab extends StatefulWidget {
   const ReportTab({super.key});
