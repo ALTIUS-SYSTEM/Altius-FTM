@@ -1,7 +1,7 @@
 "use client";
 
 import type { DemoAdapter } from "./adapter";
-import { createLocalAdapter } from "./adapter";
+import { createLocalAdapter, STORAGE_KEY } from "./adapter";
 import type { DemoState, DemoTask, DemoTaskStatus } from "./model";
 import { createEmptyState, demoTaskSchema } from "./model";
 
@@ -128,7 +128,20 @@ export const createApiAdapter = (
         return [parsed.data];
       });
       const base = createEmptyState();
-      const localState = await local.load().catch(() => base);
+      // Distinguish "nothing stored" from "stored data rejected": swallowing
+      // both discarded every persisted preference, record and permission with
+      // no notice, and the next save overwrote the original beyond recovery.
+      const localState = await local.load().catch((err: unknown) => {
+        try {
+          const raw = window.localStorage.getItem(STORAGE_KEY);
+          if (raw) window.localStorage.setItem(`${STORAGE_KEY}.corrupt`, raw);
+          window.localStorage.removeItem(STORAGE_KEY);
+        } catch {
+          // Storage unavailable; nothing to preserve.
+        }
+        console.warn("stored workspace preferences were rejected and set aside", err);
+        return base;
+      });
       lastLoaded = JSON.stringify(tasks);
       return { ...base, ...localState, tasks };
     },

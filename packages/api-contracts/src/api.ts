@@ -4,7 +4,7 @@ import { DeviceEventSchema, EventReceiptSchema, TaskSchema } from './tasks';
 import { LhsReportSchema } from './lhs';
 import { RoutePlanSchema } from './routes';
 
-export const ApiErrorSchema = z.object({ code: z.enum(['invalid_request', 'unauthenticated', 'forbidden', 'not_found', 'conflict', 'rate_limited', 'unavailable']), message: z.string().min(1).max(2000), fieldErrors: z.record(z.array(z.string())).optional(), retryable: z.boolean() }).strict().readonly();
+export const ApiErrorSchema = z.object({ code: z.enum(['invalid_request', 'unauthenticated', 'forbidden', 'not_found', 'conflict', 'rate_limited', 'unavailable']), message: z.string().min(1).max(2000), fieldErrors: z.record(IdSchema, z.array(z.string().max(500)).max(20)).optional(), retryable: z.boolean() }).strict().readonly();
 export const ResponseMetaSchema = z.object({ requestId: IdSchema, serverTimeUtc: UtcTimestampSchema, mode: z.enum(['demo', 'live']) }).strict().readonly();
 export function apiResponseSchema<T extends z.ZodTypeAny>(data: T) {
   return z.discriminatedUnion('ok', [
@@ -23,7 +23,13 @@ export const EventBatchResponseSchema = apiResponseSchema(z.array(EventReceiptSc
 export const TaskListResponseSchema = apiResponseSchema(pageSchema(TaskSchema));
 export const RoutePlanResponseSchema = apiResponseSchema(RoutePlanSchema);
 export const LhsReportResponseSchema = apiResponseSchema(LhsReportSchema);
-export const EntityDataSchema = z.object({ id: IdSchema, tenantId: IdSchema, hubId: IdSchema, typeId: IdSchema, revision: RevisionSchema, values: z.record(z.union([z.string(), z.number().finite(), z.boolean(), z.null()])).readonly() }).strict().readonly();
+/** Field keys are identifiers, not arbitrary strings: `__proto__` and
+ *  friends used to pass validation and reach whatever merges this. */
+export const EntityFieldKeySchema = IdSchema.refine(
+  k => !['__proto__', 'constructor', 'prototype'].includes(k),
+  'Reserved field key',
+);
+export const EntityDataSchema = z.object({ id: IdSchema, tenantId: IdSchema, hubId: IdSchema, typeId: IdSchema, revision: RevisionSchema, values: z.record(EntityFieldKeySchema, z.union([z.string().max(4096), z.number().finite(), z.boolean(), z.null()])).refine(v => Object.keys(v).length <= 200, 'Too many fields').readonly() }).strict().readonly();
 export type ApiError = z.infer<typeof ApiErrorSchema>;
 export type ResponseMeta = z.infer<typeof ResponseMetaSchema>;
 export type EventBatchRequest = z.infer<typeof EventBatchRequestSchema>;

@@ -272,7 +272,25 @@ impl MapsClient {
         }
         let route = res.routes.first().ok_or(ApiError::NotFound)?;
         Ok(OptimizedRoute {
-            order: route.waypoint_order.clone(),
+            // Documented to callers as indices into *their* waypoint list, so
+            // validate that claim before passing it on: a hostile or changed
+            // upstream response would otherwise hand a client an out-of-range
+            // index to dereference against its own array.
+            order: {
+                let o = &route.waypoint_order;
+                let in_range = o.iter().all(|&i| i < waypoints.len());
+                let unique = o.iter().collect::<std::collections::HashSet<_>>().len() == o.len();
+                if o.len() == waypoints.len() && in_range && unique {
+                    o.clone()
+                } else {
+                    tracing::warn!(
+                        got = o.len(),
+                        want = waypoints.len(),
+                        "maps returned an unusable waypoint_order; falling back to input order"
+                    );
+                    (0..waypoints.len()).collect()
+                }
+            },
             leg_seconds: route.legs.iter().map(|l| l.duration.value).collect(),
             total_meters: route.legs.iter().map(|l| l.distance.value).sum(),
             source: "live",

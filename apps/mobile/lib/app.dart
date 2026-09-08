@@ -200,6 +200,15 @@ class TaskCard extends StatelessWidget {
   }
 }
 
+/// Outbox delivery state → translation key. An event that left `pending` is
+/// never retried, so a rejected one must not keep reading as "pending".
+String _deliveryLabel(String delivery) => switch (delivery) {
+  'accepted' => 'synced',
+  'rejected' => 'rejectedEvent',
+  'local' => 'localOnly',
+  _ => 'pending',
+};
+
 class TaskDetailScreen extends StatelessWidget {
   const TaskDetailScreen({super.key, required this.task});
   final FieldTask task;
@@ -245,7 +254,9 @@ class TaskDetailScreen extends StatelessWidget {
             if (taskEvents.isEmpty) Text(s('empty'), style: Theme.of(context).textTheme.bodySmall),
             ...taskEvents.map((e) => ListTile(
               dense: true, leading: const Icon(Icons.bolt_rounded, size: 18, color: AppTheme.teal),
-              title: Text(e.kind), subtitle: Text('${e.utc.toLocal()} · ${s('pending')}'),
+              // Show the real delivery state: hard-coding "pending" hid every
+              // server-rejected event, which is never retried.
+              title: Text(e.kind), subtitle: Text('${e.utc.toLocal()} · ${s(_deliveryLabel(e.delivery))}'),
             )),
           ]),
         );
@@ -422,6 +433,10 @@ class SettingsTab extends StatelessWidget {
         
         final cubit = context.read<WorkCubit>();
         final pending = state.events.where((e) => e.delivery == 'pending').length;
+        // Rejected events are terminal and never retried. Counting only
+        // 'pending' made them vanish from the driver's view entirely, so a
+        // lost proof-of-service record looked like a clean outbox.
+        final rejected = state.events.where((e) => e.delivery == 'rejected').length;
         return ListView(padding: const EdgeInsets.all(16), children: [
           Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(s('workspace'), style: Theme.of(context).textTheme.titleMedium),
@@ -444,7 +459,7 @@ class SettingsTab extends StatelessWidget {
               onChanged: (v) { if (v != null) cubit.act(() => cubit.store.language(v)); }),
           ]))),
           Card(child: Column(children: [
-            ListTile(leading: const Icon(Icons.outbox_rounded), title: Text(s('history')), subtitle: Text('$pending ${s('pending')}'), trailing: TextButton(onPressed: () => cubit.act(() async {
+            ListTile(leading: const Icon(Icons.outbox_rounded), title: Text(s('history')), subtitle: Text(rejected > 0 ? '$pending ${s('pending')} · $rejected ${s('rejectedEvent')}' : '$pending ${s('pending')}'), trailing: TextButton(onPressed: () => cubit.act(() async {
               final base = await cubit.store.preference('apiBase');
               final token = await cubit.store.accessToken();
               if (base.isNotEmpty && token.isNotEmpty) {

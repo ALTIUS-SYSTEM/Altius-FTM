@@ -436,12 +436,12 @@ class WorkStore {
             // truncated or fabricated response would otherwise stamp one event's
             // delivery status onto another — and a row that leaves 'pending' is
             // never retried, so that is permanent loss of proof-of-service.
-            final sent = {for (final e in syncable) e.id: e};
+            final byId = {for (final e in syncable) e.id: e};
             final seen = <String>{};
             for (final entry in receipts) {
               if (entry is! Map<String, dynamic>) continue;
               final id = entry['event_id'] ?? entry['server_event_id'];
-              if (id is! String || !sent.containsKey(id)) continue;
+              if (id is! String || !byId.containsKey(id)) continue;
               // Only the statuses the contract defines are terminal. Anything
               // unrecognised ('retry', a missing key, a partial response) stays
               // pending so the event is resent, rather than being silently

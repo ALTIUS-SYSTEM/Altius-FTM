@@ -18,6 +18,20 @@ export const GpsObservationSchema = z.object({
   speedMetersPerSecond: z.number().finite().nonnegative().nullable(),
   mockLocationReported: z.boolean().nullable()
 }).strict().superRefine((value, context) => {
+  // A vehicle-sourced fix must name the vehicle it came from. `compareGpsStreams`
+  // derives all of its value from the two streams being independently sourced,
+  // and nothing bound `source: 'vehicle_gps'` to a registered telematics unit —
+  // one device could forge both sides of its own corroboration.
+  if (value.source === 'vehicle_gps' && value.vehicleId === null) {
+    context.addIssue({ code: 'custom', path: ['vehicleId'], message: 'vehicle_gps requires vehicleId' });
+  }
+  // `null` is unverified, not clean. Required only when a position is actually
+  // reported — an observation with no fix has nothing to attest — which stops a
+  // client from opting out of the mock-location check by omitting the flag.
+  if (value.source === 'app_gps' && value.position !== null && value.mockLocationReported === null) {
+    context.addIssue({ code: 'custom', path: ['mockLocationReported'], message: 'app_gps requires mockLocationReported' });
+  }
+
   if (value.quality === 'unavailable' && (value.position !== null || value.accuracyMeters !== null)) context.addIssue({ code: 'custom', message: 'Unavailable observation must not contain a fix' });
   if (value.quality !== 'unavailable' && (value.position === null || value.accuracyMeters === null)) context.addIssue({ code: 'custom', message: 'GPS fix requires position and accuracy' });
 }).readonly();
