@@ -2,9 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `production` carries the code; `main` holds only LICENSE + README. Watching
+    # main alone meant this workflow had never actually run against the app.
+    branches: [main, production]
   pull_request:
-    branches: [main]
+    branches: [main, production]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
