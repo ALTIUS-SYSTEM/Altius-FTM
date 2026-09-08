@@ -61,6 +61,9 @@ pub struct Config {
     pub fcm_credentials_path: Option<String>,
     /// McEasy VSMS/TMS integration. Disabled when the API key is absent.
     pub mceasy: Option<MceasyConfig>,
+    /// How long to keep `device_events` before the periodic prune deletes them.
+    /// Independent of McEasy GPS retention. Default 90 days; `0` disables prune.
+    pub events_retention_days: u64,
 }
 
 /// Credentials for the Keycloak Admin REST API.
@@ -163,6 +166,7 @@ impl std::fmt::Debug for Config {
             .field("fcm_project_id", &self.fcm_project_id)
             .field("fcm_credentials_path", &self.fcm_credentials_path)
             .field("mceasy", &self.mceasy)
+            .field("events_retention_days", &self.events_retention_days)
             .finish()
     }
 }
@@ -300,6 +304,10 @@ impl Config {
                         .and_then(|s| s.parse().ok())
                         .unwrap_or(72),
                 }),
+            events_retention_days: std::env::var("EVENTS_RETENTION_DAYS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(90),
         })
     }
 }

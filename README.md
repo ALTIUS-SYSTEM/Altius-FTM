@@ -35,7 +35,7 @@ Product monorepo for Altius FTM: driver mobile app, operations dashboard, market
 | `packages/algos` | Routing, geofence, GPS comparison, ETA |
 | `packages/i18n` | Locales: en, id, th, ja, zh, fil-PH, vi |
 | `packages/design-tokens` | Shared design tokens |
-| `backend/` | Rust Axum API — Keycloak, Postgres (default), optional TypeDB, Maps, agent |
+| `backend/` | Rust Axum API — Keycloak, Postgres (default), optional TypeDB (**experimental**), Maps, agent |
 
 ## Local development
 

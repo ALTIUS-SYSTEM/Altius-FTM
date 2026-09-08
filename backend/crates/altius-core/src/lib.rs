@@ -70,7 +70,11 @@ impl StopAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Coordinate {
+    /// Canonical wire name `lat`; accepts contract `latitude`.
+    #[serde(alias = "latitude")]
     pub lat: f64,
+    /// Canonical wire name `lng`; accepts contract `longitude`.
+    #[serde(alias = "longitude")]
     pub lng: f64,
 }
 
@@ -102,21 +106,37 @@ pub struct Task {
 /// Device clock with explicit UTC instant and bounded zone offset.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceTime {
+    /// Canonical wire name `utc`; accepts contract `occurredAtUtc`.
+    #[serde(alias = "occurredAtUtc")]
     pub utc: DateTime<Utc>,
     /// Minutes east of UTC; |offset| <= 840 (14h).
+    /// Accepts camelCase `offsetMinutes` and contract `utcOffsetMinutes`.
+    #[serde(alias = "offsetMinutes", alias = "utcOffsetMinutes")]
     pub offset_minutes: i32,
 }
 
+/// Device outbox event. Wire JSON is **snake_case** (canonical); camelCase
+/// aliases are accepted so contract-shaped bodies deserialize without a
+/// mobile adapter change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceEvent {
+    #[serde(alias = "eventId")]
     pub event_id: Id,
+    #[serde(alias = "idempotencyKey")]
     pub idempotency_key: Id,
+    #[serde(alias = "tenantId")]
     pub tenant_id: Id,
+    #[serde(alias = "hubId")]
     pub hub_id: Id,
+    /// Canonical `driver_id`; accepts `driverId` and contract `actorId`.
+    #[serde(alias = "driverId", alias = "actorId")]
     pub driver_id: Id,
+    #[serde(alias = "deviceId")]
     pub device_id: Id,
+    #[serde(alias = "taskId")]
     pub task_id: Id,
+    #[serde(default, alias = "stopId", skip_serializing_if = "Option::is_none")]
     pub stop_id: Option<Id>,
     pub action: StopAction,
     pub time: DeviceTime,
@@ -124,8 +144,44 @@ pub struct DeviceEvent {
     /// comparing the driver's app position with the vehicle telematics stream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<Coordinate>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "accuracyMeters",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub accuracy_meters: Option<f64>,
+    /// Contract schema version the device claims to speak.
+    #[serde(
+        default,
+        alias = "schemaVersion",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub schema_version: Option<u32>,
+    /// Monotonic per-device sequence for ordering within a driver outbox.
+    #[serde(
+        default,
+        alias = "deviceSequence",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub device_sequence: Option<u64>,
+    /// Task revision the device believed was current when the event was made.
+    #[serde(
+        default,
+        alias = "expectedTaskRevision",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expected_task_revision: Option<u64>,
+    /// Required when `action` is `skip` (validated in `sync_events`).
+    /// Same spelling in camelCase; alias kept for Agent 3 contract parity.
+    #[serde(default, alias = "reason", skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Optional link to a GPS observation the device already knows about.
+    #[serde(
+        default,
+        alias = "observationId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub observation_id: Option<Id>,
     /// JSON payload snapshot (proof drafts, notes). Deliberately untyped: no
     /// Zod counterpart constrains this on the TS side either (see
     /// VULN-FINDINGS.md F-07-19) — callers must not trust its shape.

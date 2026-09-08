@@ -26,11 +26,12 @@ Prefer these when integrating web, mobile, or Vercel → VPS.
 | POST | `/auth/login` | — | Password grant only if explicitly enabled |
 | POST | `/auth/refresh` | — | Refresh token exchange |
 | GET | `/auth/me` | Bearer | Subject, roles, org/hub scope |
-| GET | `/tasks` | Bearer | Tenant-scoped task list + stops |
-| GET | `/task/{id}` | Bearer | Single task + stops |
+| GET | `/tasks` | Bearer | Org board for staff / `integration`; assigned-only for drivers |
+| GET | `/task/{id}` | Bearer | Single task + stops (drivers: own assignee only) |
 | PUT | `/task/{id}` | Bearer (staff) | Update task; org from JWT |
+| DELETE | `/task/{id}` | Bearer (staff) | Delete task; 409 if `in_progress` |
 | POST | `/task-create` | Bearer (staff) | Create task + stops under caller hub |
-| POST | `/events` | Bearer (driver) | Idempotent outbox sync; receipts include `event_id` |
+| POST | `/events` | Bearer (driver) | Idempotent outbox sync; receipts include `event_id`; skip needs `reason` |
 | POST | `/route/optimize` | Bearer | Stop order optimization |
 | POST | `/route/eta` | Bearer | Directions ETA or schematic fallback |
 | POST | `/route/geocode` | Bearer | Address → coordinate |
@@ -38,10 +39,15 @@ Prefer these when integrating web, mobile, or Vercel → VPS.
 | POST | `/places/autocomplete` | Bearer | Place suggestions |
 | GET/POST | `/users`, `/drivers`, hubs, teams, … | Bearer | Roster / org admin |
 | GET/POST | `/reports`, `/costs`, `/vehicle-checks` | Bearer | LHS / costs |
+| PATCH | `/reports/{driver}/{day}` | Bearer (staff) | Review: `approved` \| `revision_requested` (+ note) |
+| GET/POST/DELETE | `/integrations`, `/integrations/{sub}` | Bearer (admin) | Bind/list/remove M2M service-account subjects |
 | GET/POST | `/monitoring/*` | Bearer | Vehicles, GPS reviews, McEasy hooks |
 | POST | `/notify/*` | Bearer | SMS / WhatsApp / push (provider-gated) |
 | POST | `/agent/dispatch-suggestion`, `/agent/resume` | Bearer (staff) | HITL agent loop |
 
+**M2M:** realm role `integration` + client-credentials Bearer (OpenAPI `oauth2ClientCredentials`); org binding via `/integrations`. Read org tasks/reports; staff writes stay staff-only.  
+**DeviceEvent:** snake_case wire + camelCase deserialize aliases; optional `schema_version`, `device_sequence`, `expected_task_revision`, `reason`, `observation_id` (V4 columns).  
+**Retention:** GPS via `MCEASY_RETENTION_HOURS`; device events via `EVENTS_RETENTION_DAYS` (default 90, `0` off).  
 **Mobile sync:** match receipts by `event_id` / `server_event_id`, never by array index.  
 **Web:** set `NEXT_PUBLIC_API_BASE` + Keycloak public client `altius-web`.  
 **OpenAPI:** [openapi/altius-ftm-v3.openapi.yaml](./openapi/altius-ftm-v3.openapi.yaml).

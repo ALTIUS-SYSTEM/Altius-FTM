@@ -6,7 +6,7 @@
 
 use anyhow::Context;
 use deadpool_postgres::{Client, Pool};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio_postgres::Row;
 use tokio_postgres::types::ToSql;
 
@@ -27,10 +27,25 @@ fn ssl_mode_requires_tls(mode: tokio_postgres::config::SslMode) -> bool {
 /// (SQLSTATE 23503). Routes use this to answer 409 Conflict instead of 500
 /// when a RESTRICT constraint fires — e.g. a hub delete racing a task create.
 pub fn is_fk_violation(e: &anyhow::Error) -> bool {
-    e.chain().any(|c| {
-        c.downcast_ref::<tokio_postgres::Error>()
-            .and_then(|pg| pg.as_db_error())
+    fn pg_is_fk(err: &tokio_postgres::Error) -> bool {
+        err.as_db_error()
             .is_some_and(|db| *db.code() == tokio_postgres::error::SqlState::FOREIGN_KEY_VIOLATION)
+    }
+    if e.downcast_ref::<tokio_postgres::Error>()
+        .is_some_and(pg_is_fk)
+    {
+        return true;
+    }
+    e.chain().any(|c| {
+        if let Some(pg) = c.downcast_ref::<tokio_postgres::Error>() {
+            return pg_is_fk(pg);
+        }
+        // Fallback when the postgres error is stringified through another
+        // wrapper (deadpool / context) and loses typed downcast.
+        let msg = c.to_string();
+        msg.contains("23503")
+            || msg.contains("foreign key constraint")
+            || msg.contains("violates RESTRICT")
     })
 }
 
@@ -483,10 +498,15 @@ impl PgStore {
             .unwrap_or_default()
             .to_string();
         let stop_for_insert = resolved_stop.clone();
+        let schema_version = ev.schema_version.map(|v| v as i32);
+        let device_sequence = ev.device_sequence.map(|v| v as i64);
+        let expected_task_revision = ev.expected_task_revision.map(|v| v as i64);
         tx.execute(
             "INSERT INTO device_events \
-             (id, org_id, hub_id, driver_sub, device_id, task_id, stop_id, request_key, action, occurred_utc, offset_min, day, payload) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+             (id, org_id, hub_id, driver_sub, device_id, task_id, stop_id, request_key, action, \
+              occurred_utc, offset_min, day, payload, \
+              schema_version, device_sequence, expected_task_revision, reason, observation_id) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)",
             &[
                 &ev.event_id,
                 &org,
@@ -501,6 +521,11 @@ impl PgStore {
                 &ev.time.offset_minutes,
                 &ev.time.utc.date_naive().to_string(),
                 &ev.payload,
+                &schema_version,
+                &device_sequence,
+                &expected_task_revision,
+                &ev.reason,
+                &ev.observation_id,
             ],
         )
         .await
@@ -787,10 +812,15 @@ impl PgStore {
 
     pub async fn link_admin_user(&self, config: &crate::config::Config) -> anyhow::Result<()> {
         let client = self.conn().await?;
+        // V4 requires users.email NOT NULL; bootstrap has no IdP email — use a
+        // stable placeholder the operator can replace after Keycloak link.
+        let email = format!("{}@altius.local", config.default_admin_sub);
         client
             .execute(
-                "INSERT INTO users (sub, role_name) VALUES ($1, 'admin') ON CONFLICT DO NOTHING",
-                &[&config.default_admin_sub],
+                "INSERT INTO users (sub, role_name, email) VALUES ($1, 'admin', $2) \
+                 ON CONFLICT (sub) DO UPDATE SET \
+                   email = COALESCE(users.email, EXCLUDED.email)",
+                &[&config.default_admin_sub, &email],
             )
             .await?;
         client
@@ -823,6 +853,7 @@ impl PgStore {
         subject: &str,
         display_name: &str,
         role: &str,
+        email: Option<&str>,
     ) -> anyhow::Result<()> {
         let mut client = self.conn().await?;
         let tx = client.transaction().await.context("open provision tx")?;
@@ -839,9 +870,12 @@ impl PgStore {
         }
 
         tx.execute(
-            "INSERT INTO users (sub, display_name, role_name) VALUES ($1,$2,$3) \
-             ON CONFLICT (sub) DO UPDATE SET display_name = EXCLUDED.display_name, role_name = EXCLUDED.role_name",
-            &[&subject, &display_name, &role],
+            "INSERT INTO users (sub, display_name, role_name, email) VALUES ($1,$2,$3,$4) \
+             ON CONFLICT (sub) DO UPDATE SET \
+               display_name = EXCLUDED.display_name, \
+               role_name = EXCLUDED.role_name, \
+               email = COALESCE(EXCLUDED.email, users.email)",
+            &[&subject, &display_name, &role, &email],
         )
         .await?;
         tx.execute(
@@ -856,6 +890,116 @@ impl PgStore {
         .await?;
         tx.commit().await.context("commit provision")?;
         Ok(())
+    }
+
+    /// Bind a Keycloak service-account subject as an `integration` member of
+    /// the caller's org (and optionally a hub). No Keycloak Admin calls —
+    /// the operator creates the confidential client and pastes the SA `sub`.
+    pub async fn provision_service_account(
+        &self,
+        org: &str,
+        subject: &str,
+        display_name: &str,
+        hub_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let mut client = self.conn().await?;
+        let tx = client
+            .transaction()
+            .await
+            .context("open provision_service_account tx")?;
+
+        if let Some(hub) = hub_id {
+            let allocated: bool = tx
+                .query_one(
+                    "SELECT EXISTS(SELECT 1 FROM org_hubs WHERE org_id = $1 AND hub_id = $2)",
+                    &[&org, &hub],
+                )
+                .await?
+                .get(0);
+            if !allocated {
+                anyhow::bail!("hub {hub} is not allocated to organization {org}");
+            }
+        }
+
+        tx.execute(
+            "INSERT INTO users (sub, display_name, role_name, email) VALUES ($1,$2,'integration',$3) \
+             ON CONFLICT (sub) DO UPDATE SET \
+               display_name = EXCLUDED.display_name, \
+               role_name = 'integration', \
+               email = COALESCE(EXCLUDED.email, users.email)",
+            &[
+                &subject,
+                &display_name,
+                &format!("{subject}@integrations.invalid"),
+            ],
+        )
+        .await?;
+        tx.execute(
+            "INSERT INTO user_orgs (user_sub, org_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+            &[&subject, &org],
+        )
+        .await?;
+        if let Some(hub) = hub_id {
+            tx.execute(
+                "INSERT INTO user_hubs (user_sub, hub_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                &[&subject, &hub],
+            )
+            .await?;
+        }
+        tx.commit()
+            .await
+            .context("commit provision_service_account")?;
+        Ok(())
+    }
+
+    pub async fn integrations_for_org(&self, org: &str) -> anyhow::Result<Vec<Value>> {
+        self.fetch_json(
+            "SELECT jsonb_build_object('user', row_to_json(u)) AS data \
+             FROM users u JOIN user_orgs uo ON uo.user_sub = u.sub \
+             WHERE uo.org_id = $1 AND u.role_name = 'integration' \
+             ORDER BY u.sub",
+            &[&org],
+        )
+        .await
+    }
+
+    /// Remove org (+ hub) membership for an integration subject. Keycloak
+    /// role/client cleanup stays a manual operator step.
+    pub async fn deprovision_service_account(
+        &self,
+        org: &str,
+        subject: &str,
+    ) -> anyhow::Result<bool> {
+        let mut client = self.conn().await?;
+        let tx = client
+            .transaction()
+            .await
+            .context("open deprovision_service_account tx")?;
+        let n = tx
+            .execute(
+                "DELETE FROM user_orgs WHERE org_id = $1 AND user_sub = $2 \
+                 AND EXISTS ( \
+                     SELECT 1 FROM users WHERE sub = $2 AND role_name = 'integration' \
+                 )",
+                &[&org, &subject],
+            )
+            .await?;
+        if n == 0 {
+            return Ok(false);
+        }
+        // Detach hubs that belong to this org so the SA does not keep a
+        // dangling hub membership after org unlink.
+        tx.execute(
+            "DELETE FROM user_hubs uh \
+             USING org_hubs oh \
+             WHERE uh.user_sub = $2 AND uh.hub_id = oh.hub_id AND oh.org_id = $1",
+            &[&org, &subject],
+        )
+        .await?;
+        tx.commit()
+            .await
+            .context("commit deprovision_service_account")?;
+        Ok(true)
     }
 
     // ---------- hubs ----------
@@ -1304,6 +1448,17 @@ impl PgStore {
         .await
     }
 
+    pub async fn costs_for_org(&self, org: &str, day: Option<&str>) -> anyhow::Result<Vec<Value>> {
+        self.fetch_json(
+            "SELECT jsonb_build_object('entry', row_to_json(c)) AS data \
+             FROM cost_entries c \
+             WHERE c.org_id = $1 AND ($2::text IS NULL OR c.day = $2) \
+             ORDER BY c.day, c.id",
+            &[&org, &day],
+        )
+        .await
+    }
+
     // ---------- daily reports ----------
 
     pub async fn record_daily_report(
@@ -1344,7 +1499,11 @@ impl PgStore {
         Ok(())
     }
 
-    pub async fn reports_for_driver(&self, org: &str, driver_sub: &str) -> anyhow::Result<Vec<Value>> {
+    pub async fn reports_for_driver(
+        &self,
+        org: &str,
+        driver_sub: &str,
+    ) -> anyhow::Result<Vec<Value>> {
         self.fetch_json(
             "SELECT jsonb_build_object('report', row_to_json(r)) AS data \
              FROM daily_reports r \
@@ -1353,6 +1512,114 @@ impl PgStore {
             &[&org, &driver_sub],
         )
         .await
+    }
+
+    pub async fn reports_for_org(&self, org: &str) -> anyhow::Result<Vec<Value>> {
+        self.fetch_json(
+            "SELECT jsonb_build_object('report', row_to_json(r)) AS data \
+             FROM daily_reports r \
+             WHERE r.org_id = $1 \
+             ORDER BY r.day, r.driver_sub",
+            &[&org],
+        )
+        .await
+    }
+
+    /// Staff LHS review: `submitted` → `approved` | `revision_requested`.
+    ///
+    /// Appends a review entry into `payload.reviews` (LhsReviewRevision shape)
+    /// and updates `status` / `revision` columns. Returns false when the row is
+    /// missing or not in a reviewable state.
+    pub async fn review_daily_report(
+        &self,
+        org: &str,
+        driver_sub: &str,
+        day: &str,
+        reviewer_sub: &str,
+        decision: &str,
+        note: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let (action, next_status, bump_revision) = match decision {
+            "approved" => ("approve", "approved", false),
+            "revision_requested" => ("request_revision", "revision_requested", true),
+            _ => anyhow::bail!("decision must be approved|revision_requested"),
+        };
+        if action == "request_revision" && note.map(str::trim).filter(|n| !n.is_empty()).is_none() {
+            anyhow::bail!("revision request requires a note");
+        }
+
+        let mut client = self.conn().await?;
+        let tx = client
+            .transaction()
+            .await
+            .context("open review_daily_report tx")?;
+
+        let row = tx
+            .query_opt(
+                "SELECT status, revision, payload FROM daily_reports \
+                 WHERE org_id = $1 AND driver_sub = $2 AND day = $3 \
+                 FOR UPDATE",
+                &[&org, &driver_sub, &day],
+            )
+            .await?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let status: String = row.get(0);
+        if status != "submitted" {
+            anyhow::bail!("report is not awaiting review (status={status})");
+        }
+        let revision: i64 = row.get(1);
+        let mut payload: Value = row.get(2);
+        let new_revision = if bump_revision {
+            revision + 1
+        } else {
+            revision
+        };
+
+        let review = json!({
+            "revision": new_revision,
+            "action": action,
+            "actorId": reviewer_sub,
+            "atUtc": chrono::Utc::now().to_rfc3339(),
+            "note": note.map(str::trim).filter(|n| !n.is_empty()),
+        });
+        match payload.as_object_mut() {
+            Some(obj) => {
+                match obj.get_mut("reviews") {
+                    Some(Value::Array(arr)) => arr.push(review),
+                    _ => {
+                        obj.insert("reviews".into(), json!([review]));
+                    }
+                }
+                obj.insert("status".into(), json!(next_status));
+                obj.insert("revision".into(), json!(new_revision));
+            }
+            None => {
+                payload = json!({
+                    "reviews": [review],
+                    "status": next_status,
+                    "revision": new_revision,
+                });
+            }
+        }
+
+        let n = tx
+            .execute(
+                "UPDATE daily_reports SET status = $4, revision = $5, payload = $6 \
+                 WHERE org_id = $1 AND driver_sub = $2 AND day = $3 AND status = 'submitted'",
+                &[
+                    &org,
+                    &driver_sub,
+                    &day,
+                    &next_status,
+                    &new_revision,
+                    &payload,
+                ],
+            )
+            .await?;
+        tx.commit().await.context("commit review_daily_report")?;
+        Ok(n > 0)
     }
 
     // ---------- vehicle checks ----------
@@ -1617,5 +1884,23 @@ impl PgStore {
             )
             .await?;
         Ok(())
+    }
+
+    /// Delete device outbox events older than `boundary` (`occurred_utc`).
+    ///
+    /// Served by `idx_device_events_occurred` (V4). Independent of McEasy GPS
+    /// observation prune — driven by `EVENTS_RETENTION_DAYS` in `main`.
+    pub async fn prune_device_events_older_than(
+        &self,
+        boundary: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<u64> {
+        let client = self.conn().await?;
+        let n = client
+            .execute(
+                "DELETE FROM device_events WHERE occurred_utc < $1",
+                &[&boundary],
+            )
+            .await?;
+        Ok(n)
     }
 }

@@ -633,7 +633,10 @@ impl TypedbStore {
         subject: &str,
         display_name: &str,
         role: &str,
+        _email: Option<&str>,
     ) -> anyhow::Result<()> {
+        // TypeDB schema has no users.email attribute yet; Postgres is the
+        // contract store for V4 `users.email NOT NULL`.
         let tx = self
             .driver
             .transaction(&self.database, TransactionType::Write)
@@ -658,6 +661,29 @@ impl TypedbStore {
         tx.query(&q).await.context("provision user")?;
         tx.commit().await.context("commit provisioning")?;
         Ok(())
+    }
+
+    /// TypeDB experimental: M2M membership is Postgres-only for now.
+    pub async fn provision_service_account(
+        &self,
+        _org: &str,
+        _subject: &str,
+        _display_name: &str,
+        _hub_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("provision_service_account requires STORE_BACKEND=postgres")
+    }
+
+    pub async fn integrations_for_org(&self, _org: &str) -> anyhow::Result<Vec<Value>> {
+        Ok(vec![])
+    }
+
+    pub async fn deprovision_service_account(
+        &self,
+        _org: &str,
+        _subject: &str,
+    ) -> anyhow::Result<bool> {
+        anyhow::bail!("deprovision_service_account requires STORE_BACKEND=postgres")
     }
 
     /// Run a write query and report whether it matched anything.
@@ -1189,6 +1215,14 @@ impl TypedbStore {
         self.fetch_all(&q).await
     }
 
+    pub async fn costs_for_org(
+        &self,
+        _org: &str,
+        _day: Option<&str>,
+    ) -> anyhow::Result<Vec<Value>> {
+        anyhow::bail!("costs_for_org requires STORE_BACKEND=postgres")
+    }
+
     /// Insert a daily LHS report.
     pub async fn record_daily_report(
         &self,
@@ -1224,7 +1258,11 @@ impl TypedbStore {
     }
 
     /// List daily reports submitted by a driver.
-    pub async fn reports_for_driver(&self, _org: &str, driver_sub: &str) -> anyhow::Result<Vec<Value>> {
+    pub async fn reports_for_driver(
+        &self,
+        _org: &str,
+        driver_sub: &str,
+    ) -> anyhow::Result<Vec<Value>> {
         let q = format!(
             r#"match
                 $d isa user, has user-sub "{driver}";
@@ -1233,6 +1271,22 @@ impl TypedbStore {
             driver = Self::esc(driver_sub)
         );
         self.fetch_all(&q).await
+    }
+
+    pub async fn reports_for_org(&self, _org: &str) -> anyhow::Result<Vec<Value>> {
+        anyhow::bail!("reports_for_org requires STORE_BACKEND=postgres")
+    }
+
+    pub async fn review_daily_report(
+        &self,
+        _org: &str,
+        _driver_sub: &str,
+        _day: &str,
+        _reviewer_sub: &str,
+        _decision: &str,
+        _note: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        anyhow::bail!("review_daily_report requires STORE_BACKEND=postgres")
     }
 
     /// Record a daily vehicle checklist.

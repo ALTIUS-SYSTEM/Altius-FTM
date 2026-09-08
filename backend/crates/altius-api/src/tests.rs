@@ -36,6 +36,7 @@ fn test_state() -> Arc<AppState> {
         default_hub_id: "jakarta".into(),
         default_hub_name: "Jakarta".into(),
         default_admin_sub: "admin".into(),
+        events_retention_days: 90,
     };
     Arc::new(AppState {
         mceasy_client: None,

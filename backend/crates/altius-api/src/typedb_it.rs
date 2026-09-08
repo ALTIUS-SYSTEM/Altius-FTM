@@ -139,6 +139,7 @@ fn bootstrap_config() -> crate::config::Config {
         default_hub_id: "bootstrap-hub".into(),
         default_hub_name: "Bootstrap Hub".into(),
         default_admin_sub: "bootstrap-admin".into(),
+        events_retention_days: 90,
     }
 }
 
@@ -172,10 +173,17 @@ async fn roster_queries_run_against_the_real_schema() {
     let s = f.store();
     f.seed("org-a", "hub-a").await;
 
-    s.provision_user("org-a", "hub-a", "sub-driver", "Adi Pratama", "driver")
-        .await
-        .expect("provision driver");
-    s.provision_user("org-a", "hub-a", "sub-lead", "Nadia Putri", "lead")
+    s.provision_user(
+        "org-a",
+        "hub-a",
+        "sub-driver",
+        "Adi Pratama",
+        "driver",
+        None,
+    )
+    .await
+    .expect("provision driver");
+    s.provision_user("org-a", "hub-a", "sub-lead", "Nadia Putri", "lead", None)
         .await
         .expect("provision lead");
 
@@ -205,7 +213,7 @@ async fn team_lifecycle_survives_deleting_a_team_with_members() {
     let f = fixture!();
     let s = f.store();
     f.seed("org-a", "hub-a").await;
-    s.provision_user("org-a", "hub-a", "sub-1", "Adi", "driver")
+    s.provision_user("org-a", "hub-a", "sub-1", "Adi", "driver", None)
         .await
         .unwrap();
 
@@ -251,7 +259,7 @@ async fn hub_delete_refuses_to_orphan_records() {
     );
     assert!(!s.hub_in_use("org-a", "hub-b").await.unwrap());
 
-    s.provision_user("org-a", "hub-b", "sub-2", "Sari", "driver")
+    s.provision_user("org-a", "hub-b", "sub-2", "Sari", "driver", None)
         .await
         .unwrap();
     assert!(
@@ -336,6 +344,11 @@ async fn events_are_tenant_scoped_and_replay_safe() {
         // An event from a device that predates location reporting.
         location: None,
         accuracy_meters: None,
+        schema_version: None,
+        device_sequence: None,
+        expected_task_revision: None,
+        reason: None,
+        observation_id: None,
         payload: serde_json::json!({}),
     };
 
@@ -381,7 +394,7 @@ async fn every_remaining_query_executes() {
 
     assert!(s.ping().await, "ping");
 
-    s.provision_user("org-a", "hub-a", "sub-1", "Adi Pratama", "driver")
+    s.provision_user("org-a", "hub-a", "sub-1", "Adi Pratama", "driver", None)
         .await
         .unwrap();
 
@@ -429,17 +442,25 @@ async fn every_remaining_query_executes() {
         note: "Pertamina Kuningan".into(),
         day: "2026-09-08".into(),
     };
-    s.record_cost(&cost, "sub-1").await.unwrap();
-    assert_eq!(s.costs_for_driver("sub-1", None).await.unwrap().len(), 1);
+    s.record_cost("org-a", "hub-a", &cost, "sub-1")
+        .await
+        .unwrap();
     assert_eq!(
-        s.costs_for_driver("sub-1", Some("2026-09-08"))
+        s.costs_for_driver("org-a", "sub-1", None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        s.costs_for_driver("org-a", "sub-1", Some("2026-09-08"))
             .await
             .unwrap()
             .len(),
         1
     );
     assert!(
-        s.costs_for_driver("sub-1", Some("1999-01-01"))
+        s.costs_for_driver("org-a", "sub-1", Some("1999-01-01"))
             .await
             .unwrap()
             .is_empty()
@@ -461,8 +482,13 @@ async fn every_remaining_query_executes() {
         status: LhsStatus::Submitted,
         revision: 0,
     };
-    s.record_daily_report(&report, "sub-1").await.unwrap();
-    assert_eq!(s.reports_for_driver("sub-1").await.unwrap().len(), 1);
+    s.record_daily_report("org-a", &report, "sub-1")
+        .await
+        .unwrap();
+    assert_eq!(
+        s.reports_for_driver("org-a", "sub-1").await.unwrap().len(),
+        1
+    );
 
     // --- push tokens ------------------------------------------------------
     s.register_push_token("sub-1", "dev-1", "token-abc")

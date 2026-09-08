@@ -6,8 +6,8 @@ use axum::{Json, Router};
 use serde_json::{Value, json};
 
 use super::{
-    AuthUser, org_of, require_admin, require_staff, store, touched_or_404, valid_coordinate,
-    valid_name,
+    AuthUser, org_of, require_admin, require_staff_or_integration, store, touched_or_404,
+    valid_coordinate, valid_name,
 };
 use crate::AppState;
 use crate::error::{ApiError, ApiResult};
@@ -36,7 +36,7 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 async fn list_hubs(State(s): State<Arc<AppState>>, principal: AuthUser) -> ApiResult<Json<Value>> {
-    require_staff(&principal)?;
+    require_staff_or_integration(&principal)?;
     let org = org_of(&s, &principal.subject).await?;
     let hubs = store(&s)?
         .hubs_for_org(&org)
@@ -105,18 +105,13 @@ async fn delete_hub(
     }
     // The pre-check is not atomic with the delete: a task/report written in
     // between trips a RESTRICT FK (SQLSTATE 23503) — answer 409, not 500.
-    touched_or_404(
-        store(&s)?
-            .delete_hub(&org, &id)
-            .await
-            .map_err(|e| {
-                if crate::store::pg::is_fk_violation(&e) {
-                    ApiError::Conflict("hub is still referenced".into())
-                } else {
-                    ApiError::Internal(e)
-                }
-            })?,
-    )
+    touched_or_404(store(&s)?.delete_hub(&org, &id).await.map_err(|e| {
+        if crate::store::pg::is_fk_violation(&e) {
+            ApiError::Conflict("hub is still referenced".into())
+        } else {
+            ApiError::Internal(e)
+        }
+    })?)
 }
 
 async fn update_organization(

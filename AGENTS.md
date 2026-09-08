@@ -61,6 +61,24 @@ cd apps/mobile && flutter run -t lib/main_dev.dart \
 Without dart-defines, `main_dev` keeps the local demo workspace path (no IdP).
 `main_prod` requires Keycloak (`demoWorkspace: false`).
 
+## Roles and M2M
+
+- Realm roles map in `altius-api` auth: `super-admin`, `admin`, `supervisor`,
+  `lead`, `driver`, **`integration`**.
+- `integration` is for machine clients (Keycloak `client_credentials`). It may
+  read org-scoped tasks/reports like staff; it does **not** get staff write
+  routes. Bind subjects with `POST /api/v3/integrations` (admin). Local realm
+  import includes role + template client `altius-integration` — see
+  `deploy/keycloak/README.md`.
+- OpenAPI security scheme: `oauth2ClientCredentials`.
+
+## Retention env
+
+| Variable | Purpose | Status |
+|----------|---------|--------|
+| `MCEASY_RETENTION_HOURS` | GPS observation prune window (McEasy worker) | Implemented |
+| `EVENTS_RETENTION_DAYS` | Device-event prune (default `90`; `0` disables; daily worker in `main`) | Implemented |
+
 ## Key decisions
 
 - Mobile auth uses `flutter_appauth` PKCE against Keycloak.

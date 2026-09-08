@@ -308,20 +308,47 @@ ALTER TABLE users DROP COLUMN email;
 -- + DROP semua CHECK (A–D) dan index baru (K); CREATE ulang index lama yang di-drop.
 ```
 
-### V4 — fase CONTRACT (menunggu perubahan kode; jangan diterapkan dulu)
+### V4 — fase CONTRACT (`V4__contract_phase.sql`)
 
-| Perubahan | Prasyarat kode |
+**Pola expand→backfill→contract:** SET NOT NULL / PK / CHECK dijalankan **hanya
+setelah** deploy Phase 0 yang dual-write kolom tenant/GPS/email + backfill di
+file migrasi. Jangan terapkan V4 terhadap DB yang masih ditulis oleh biner lama.
+
+Path: `backend/crates/altius-api/migrations/V4__contract_phase.sql`
+
+| Perubahan | Prasyarat kode / backfill |
 |---|---|
-| `task_assignments.org_id SET NOT NULL` | INSERT di `create_task`/`update_task` membawa `org_id` |
-| `device_events.hub_id` diisi; pertimbangkan `NOT NULL` | `record_event` memasukkan `ev.hub_id` ke INSERT |
-| `cost_entries.org_id`/`hub_id` `SET NOT NULL`; `costs_for_driver` di-scope org | `record_cost` meneruskan scope principal; route `list_costs` resolve org |
-| `daily_reports.org_id SET NOT NULL`; PK → `(org_id, driver_sub, day)` | `record_daily_report` membawa org; `list_reports` scope org |
-| `daily_reports.hub_id` route fix | `record_report` memakai `ok_or(Forbidden)` bukan `unwrap_or_default()` — driver tanpa hub saat ini insert `hub_id=''` → 500 (latent bug) |
-| `gps_observations` CHECK `accurate ⇒ position+accuracy` dan `app_gps ⇒ mock_reported` (INV-13/14) | `record_event` menulis `accuracy_meters`/`mock_reported` yang benar |
-| `hub_in_use` diperluas ke `daily_reports`, `vehicle_checks`, `gps_reviews` | RESTRICT (V3) sudah memblokir; tanpa ini `delete_hub` gagal dengan error FK tak-ter-mapping → 500 |
-| `record_event` lock ordering `tasks → stops` (§5) | Deadlock fix |
-| Kolom kontrak `device_events`: `schema_version`, `device_sequence`, `expected_task_revision`, `reason`, `observation_id` | Tipe Rust `DeviceEvent` menambah field terlebih dulu |
-| `users.email NOT NULL` (bila diputuskan wajib) | `provision_user` menyimpan email dari Keycloak |
+| Kolom kontrak `device_events`: `schema_version`, `device_sequence`, `expected_task_revision`, `reason`, `observation_id` (nullable) | `DeviceEvent` + `record_event` INSERT bindings |
+| CHECK `device_events_skip_requires_reason` | `sync_events` menolak `skip` tanpa reason non-kosong |
+| `task_assignments.org_id SET NOT NULL` | INSERT di `create_task`/`update_task` + backfill dari `tasks.org_id` |
+| `device_events.hub_id SET NOT NULL` | `record_event` menulis `ev.hub_id`; backfill via `tasks` lalu `org_hubs` |
+| `cost_entries.org_id`/`hub_id` `SET NOT NULL` | `record_cost` scope principal; backfill `user_orgs`/`user_hubs`/`org_hubs` |
+| `daily_reports.org_id SET NOT NULL`; PK → `(org_id, driver_sub, day)` | `record_daily_report` membawa org; backfill `user_orgs` |
+| `users.email SET NOT NULL` | `provision_user(..., email)`; backfill `sub \|\| '@users.invalid'` |
+| `gps_observations` CHECK accurate⇒fix+accuracy; app_gps+fix⇒`mock_reported` (INV-13/14) | `record_event` hanya menulis observasi bila `accuracy` ada; `mock_reported` dari payload |
+| Index `idx_device_events_occurred` | Mendukung prune retensi (worker terpisah) |
+
+**Pre-flight sebelum V4 pada DB berisi data:**
+
+```sql
+-- Baris yang akan gagal SET NOT NULL setelah backfill (harusnya 0 setelah UPDATE):
+SELECT count(*) FROM task_assignments WHERE org_id IS NULL;
+SELECT count(*) FROM device_events WHERE hub_id IS NULL;
+SELECT count(*) FROM cost_entries WHERE org_id IS NULL OR hub_id IS NULL;
+SELECT count(*) FROM daily_reports WHERE org_id IS NULL;
+SELECT count(*) FROM users WHERE email IS NULL OR btrim(email) = '';
+-- GPS yang akan gagal CHECK INV-13/14:
+SELECT count(*) FROM gps_observations
+  WHERE quality = 'accurate'
+    AND (lat IS NULL OR lng IS NULL OR accuracy_meters IS NULL);
+SELECT count(*) FROM gps_observations
+  WHERE source = 'app_gps' AND lat IS NOT NULL AND mock_reported IS NULL;
+```
+
+**Skrip turun (V4) — ringkas:** drop CHECK GPS + skip-reason; restore
+`daily_reports` PK `(driver_sub, day)`; `ALTER … DROP NOT NULL` pada kolom
+kontrak; `DROP COLUMN` lima kolom kontrak `device_events`; drop
+`idx_device_events_occurred`.
 
 Pola expand–contract untuk perubahan tak-kompatibel ke depan (contoh: rename kolom):
 `ADD kolom_baru` → dual-write di kode → backfill → pindahkan pembaca →
@@ -337,7 +364,7 @@ Estimasi basis: 100 driver aktif per org besar, hub operasional 12 jam.
 | Tabel | Pertumbuhan | Retensi | Risiko pertama |
 |---|---|---|---|
 | `gps_observations` | App GPS per event + telemetri kendaraan tiap `MCEASY_POLL_SECONDS=60` → ~1.440/hari/kendaraan → **~150–300rb baris/hari/org** | **72 jam** via `prune_gps_observations_older_than` (worker McEasy) — `idx_gps_observations_recorded` (V3) melayani DELETE lintas-org | Tabel terpanas. Prune harus dijadwalkan berkala; evaluasi `PARTITION BY RANGE (recorded_at)` bila >10 jt baris live |
-| `device_events` | ~50–500/hari/driver → **~5–50rb/hari/org** | **TIDAK ADA retensi — tumbuh tak terbatas** | Tabel kedua yang bermasalah. Tetapkan retensi (mis. arsip >90 hari ke DuckDB/parquet, hapus) — keputusan produk |
+| `device_events` | ~50–500/hari/driver → **~5–50rb/hari/org** | **`EVENTS_RETENTION_DAYS` (default 90)** via `prune_device_events_older_than` — periodic worker in `main.rs` (independent of McEasy); `idx_device_events_occurred` (V4) | Set `EVENTS_RETENTION_DAYS=0` to disable |
 | `gps_reviews` | Sebagian kecil observasi | Tanpa retensi — audit | Kecil |
 | `daily_reports` | 1/hari/driver → ~100/hari/org | Permanen (audit keuangan) | Kecil |
 | `cost_entries` | ~5–20/hari/driver | Permanen (keuangan) | Kecil |
@@ -345,8 +372,9 @@ Estimasi basis: 100 driver aktif per org besar, hub operasional 12 jam.
 | `tasks`/`stops` | ~puluhan–ratusan/hari/org | Permanen | Kecil |
 | Master (`users`,`orgs`,`hubs`,`teams`,`vehicles`,`devices`) | Lambat | Permanen | Tidak relevan |
 
-Urutan masalah: `gps_observations` (sudah ada jalur prune) → `device_events`
-(**belum ada retensi — gap**) → sisanya tidak akan menjadi masalah dalam waktu dekat.
+Urutan masalah: `gps_observations` (prune McEasy) → `device_events`
+(`EVENTS_RETENTION_DAYS` / worker di `main.rs`) → sisanya tidak akan menjadi
+masalah dalam waktu dekat.
 
 ---
 
@@ -386,9 +414,11 @@ tidak dipulihkan — itu desain, bukan kehilangan.
 Skrip lengkap ada di `backend/crates/altius-api/migrations/`:
 - `V1__init.sql` — skema inti (tenant, task, event, report, cost, check, device)
 - `V2__gps.sql` — `gps_observations`, `gps_reviews`
-- `V3__contract_integrity.sql` — **baru**: invariant kontrak, kunci tenant yang
-  hilang, FK komposit keanggotaan assignee, perilaku delete yang disengaja,
-  widening int4→bigint, indeks turunan-query. <ref_file file="/Users/macbook/Altius-FTM/backend/crates/altius-api/migrations/V3__contract_integrity.sql" />
+- `V3__contract_integrity.sql` — fase expand: invariant kontrak, kunci tenant,
+  FK komposit, perilaku delete, widening int4→bigint, indeks
+- `V4__contract_phase.sql` — fase contract: SET NOT NULL tenant cols, PK
+  `daily_reports`, kolom kontrak `device_events`, GPS CHECK INV-13/14,
+  skip⇒reason CHECK, `users.email NOT NULL`
 
 ---
 

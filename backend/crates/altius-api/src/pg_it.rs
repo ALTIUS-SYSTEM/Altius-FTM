@@ -81,6 +81,7 @@ impl Fixture {
             fcm_project_id: None,
             fcm_credentials_path: None,
             mceasy: None,
+            events_retention_days: 90,
         }
     }
 
@@ -111,8 +112,9 @@ impl Fixture {
     }
 
     async fn seed_driver(&self, org: &str, hub: &str, sub: &str) {
+        let email = format!("{sub}@example.test");
         self.store()
-            .provision_user(org, hub, sub, "Test Driver", "driver")
+            .provision_user(org, hub, sub, "Test Driver", "driver", Some(&email))
             .await
             .expect("provision driver");
     }
@@ -184,6 +186,11 @@ fn event(
         },
         location: None,
         accuracy_meters: None,
+        schema_version: None,
+        device_sequence: None,
+        expected_task_revision: None,
+        reason: None,
+        observation_id: None,
         payload: serde_json::json!({}),
     }
 }
@@ -391,6 +398,8 @@ async fn reports_costs_and_vehicle_checks() {
 
     fx.store()
         .record_cost(
+            &org,
+            &hub,
             &CostEntry {
                 id: uniq("cost"),
                 category: ExpenseCategory::Fuel,
@@ -406,6 +415,7 @@ async fn reports_costs_and_vehicle_checks() {
 
     fx.store()
         .record_daily_report(
+            &org,
             &DailyReport {
                 day: "2026-09-08".into(),
                 driver_id: driver.clone(),
@@ -454,7 +464,7 @@ async fn reports_costs_and_vehicle_checks() {
 
     assert_eq!(
         fx.store()
-            .costs_for_driver(&driver, None)
+            .costs_for_driver(&org, &driver, None)
             .await
             .expect("costs")
             .len(),
@@ -462,7 +472,7 @@ async fn reports_costs_and_vehicle_checks() {
     );
     assert_eq!(
         fx.store()
-            .reports_for_driver(&driver)
+            .reports_for_driver(&org, &driver)
             .await
             .expect("reports")
             .len(),
@@ -610,4 +620,303 @@ async fn push_tokens_and_mceasy_sync() {
 
     let orgs = fx.store().organizations().await.expect("organizations");
     assert!(orgs.contains(&org));
+}
+
+#[tokio::test]
+async fn report_without_membership_is_forbidden_path() {
+    let Some(fx) = Fixture::new().await else {
+        return;
+    };
+    // Route `record_report` answers Forbidden when organization_and_hub_of is
+    // None. Assert the store condition that drives that mapping.
+    let stranger = uniq("stranger");
+    assert!(
+        fx.store()
+            .organization_and_hub_of(&stranger)
+            .await
+            .expect("lookup")
+            .is_none()
+    );
+    assert!(
+        fx.store()
+            .organization_of(&stranger)
+            .await
+            .expect("org of")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn delete_hub_with_report_maps_fk_or_in_use() {
+    let Some(fx) = Fixture::new().await else {
+        return;
+    };
+    let org = uniq("org");
+    let hub = uniq("hub");
+    let driver = uniq("driver");
+    fx.seed_org(&org, &hub).await;
+    fx.seed_driver(&org, &hub, &driver).await;
+
+    fx.store()
+        .record_daily_report(
+            &org,
+            &DailyReport {
+                day: "2026-09-08".into(),
+                driver_id: driver.clone(),
+                hub_id: hub.clone(),
+                driver_name: "Test Driver".into(),
+                vehicle_number: "B 1234 CD".into(),
+                odometer_start: None,
+                odometer_end: None,
+                notes: String::new(),
+                visited_task_ids: vec![],
+                completed_stop_ids: vec![],
+                costs: vec![],
+                status: LhsStatus::Submitted,
+                revision: 0,
+            },
+            &driver,
+        )
+        .await
+        .expect("record report");
+
+    // Route refuses via hub_in_use before delete; assert that path first.
+    assert!(
+        fx.store().hub_in_use(&org, &hub).await.expect("hub in use"),
+        "daily_reports must block hub delete"
+    );
+
+    // If delete is still attempted (race past the pre-check), Postgres RESTRICT
+    // must surface as a FK violation so routes map it to 409 Conflict.
+    match fx.store().delete_hub(&org, &hub).await {
+        Ok(deleted) => {
+            // Should not succeed while the report still references the hub.
+            assert!(!deleted, "delete_hub must not remove a hub with reports");
+        }
+        Err(e) => {
+            assert!(
+                crate::store::pg::is_fk_violation(&e),
+                "expected FK violation for mapped 409, got: {e:#}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn costs_and_reports_are_org_isolated() {
+    let Some(fx) = Fixture::new().await else {
+        return;
+    };
+    let org_a = uniq("orgA");
+    let hub_a = uniq("hubA");
+    let org_b = uniq("orgB");
+    let hub_b = uniq("hubB");
+    let driver = uniq("driver");
+    fx.seed_org(&org_a, &hub_a).await;
+    fx.seed_org(&org_b, &hub_b).await;
+    // Same driver subject can only belong to one org via user_orgs in practice;
+    // seed in A and write costs/reports under A — B must not see them.
+    fx.seed_driver(&org_a, &hub_a, &driver).await;
+
+    fx.store()
+        .record_cost(
+            &org_a,
+            &hub_a,
+            &CostEntry {
+                id: uniq("cost"),
+                category: ExpenseCategory::Fuel,
+                amount_minor: 1000,
+                currency: "IDR".into(),
+                note: "A".into(),
+                day: "2026-09-08".into(),
+            },
+            &driver,
+        )
+        .await
+        .expect("cost A");
+    fx.store()
+        .record_daily_report(
+            &org_a,
+            &DailyReport {
+                day: "2026-09-08".into(),
+                driver_id: driver.clone(),
+                hub_id: hub_a.clone(),
+                driver_name: "Driver".into(),
+                vehicle_number: "B 1".into(),
+                odometer_start: None,
+                odometer_end: None,
+                notes: String::new(),
+                visited_task_ids: vec![],
+                completed_stop_ids: vec![],
+                costs: vec![],
+                status: LhsStatus::Submitted,
+                revision: 0,
+            },
+            &driver,
+        )
+        .await
+        .expect("report A");
+
+    assert_eq!(
+        fx.store()
+            .costs_for_driver(&org_a, &driver, None)
+            .await
+            .expect("costs A")
+            .len(),
+        1
+    );
+    assert!(
+        fx.store()
+            .costs_for_driver(&org_b, &driver, None)
+            .await
+            .expect("costs B")
+            .is_empty(),
+        "org B must not see org A costs"
+    );
+    assert_eq!(
+        fx.store()
+            .reports_for_driver(&org_a, &driver)
+            .await
+            .expect("reports A")
+            .len(),
+        1
+    );
+    assert!(
+        fx.store()
+            .reports_for_driver(&org_b, &driver)
+            .await
+            .expect("reports B")
+            .is_empty(),
+        "org B must not see org A reports"
+    );
+}
+
+#[tokio::test]
+async fn prune_device_events_older_than_boundary() {
+    let Some(fx) = Fixture::new().await else {
+        return;
+    };
+    let org = uniq("org");
+    let hub = uniq("hub");
+    let driver = uniq("driver");
+    fx.seed_org(&org, &hub).await;
+    fx.seed_driver(&org, &hub, &driver).await;
+
+    let t = task(&uniq("task"), &org, &hub);
+    fx.store().create_task(&org, &t).await.expect("create task");
+    let ev = event(
+        &uniq("ev"),
+        &org,
+        &hub,
+        &t.id,
+        Some(&t.stops[0].id),
+        StopAction::Arrive,
+    );
+    fx.store()
+        .record_event(&org, &driver, &ev)
+        .await
+        .expect("record event");
+
+    // Boundary in the future deletes everything; past leaves rows alone.
+    let deleted = fx
+        .store()
+        .prune_device_events_older_than(Utc::now() + chrono::Duration::days(1))
+        .await
+        .expect("prune");
+    assert!(deleted >= 1, "expected at least the seeded event pruned");
+}
+
+#[tokio::test]
+async fn lock_order_record_event_and_update_task() {
+    let Some(fx) = Fixture::new().await else {
+        return;
+    };
+    let org = uniq("org");
+    let hub = uniq("hub");
+    let driver = uniq("driver");
+    fx.seed_org(&org, &hub).await;
+    fx.seed_driver(&org, &hub, &driver).await;
+
+    let t = task(&uniq("task"), &org, &hub);
+    fx.store().create_task(&org, &t).await.expect("create task");
+
+    // Concurrent staff update + driver event used to deadlock when lock order
+    // was stops→tasks vs tasks→stops. Both paths now take tasks→stops.
+    let store_a = fx.store().clone();
+    let store_b = fx.store().clone();
+    let org_a = org.clone();
+    let org_b = org.clone();
+    let driver_b = driver.clone();
+    let mut task_update = t.clone();
+    task_update.title = "Updated concurrently".into();
+    let ev = event(
+        &uniq("ev"),
+        &org,
+        &hub,
+        &t.id,
+        Some(&t.stops[0].id),
+        StopAction::Arrive,
+    );
+
+    let update = tokio::spawn(async move { store_a.update_task(&org_a, &task_update).await });
+    let record = tokio::spawn(async move { store_b.record_event(&org_b, &driver_b, &ev).await });
+
+    let (u, r) = tokio::join!(update, record);
+    u.expect("update join")
+        .expect("update_task must not deadlock");
+    r.expect("record join")
+        .expect("record_event must not deadlock");
+}
+
+#[tokio::test]
+async fn provision_service_account_org_resolution() {
+    let Some(fx) = Fixture::new().await else {
+        return;
+    };
+    let org = uniq("org");
+    let hub = uniq("hub");
+    let sa = uniq("sa");
+    fx.seed_org(&org, &hub).await;
+
+    fx.store()
+        .provision_service_account(&org, &sa, "M2M Template", Some(&hub))
+        .await
+        .expect("provision service account");
+
+    assert_eq!(
+        fx.store().organization_of(&sa).await.expect("org of SA"),
+        Some(org.clone())
+    );
+    assert_eq!(
+        fx.store()
+            .organization_and_hub_of(&sa)
+            .await
+            .expect("org and hub of SA"),
+        Some((org.clone(), hub.clone()))
+    );
+
+    let listed = fx
+        .store()
+        .integrations_for_org(&org)
+        .await
+        .expect("list integrations");
+    assert!(
+        listed.iter().any(|row| row["user"]["sub"] == sa),
+        "provisioned SA must appear in integrations_for_org"
+    );
+
+    assert!(
+        fx.store()
+            .deprovision_service_account(&org, &sa)
+            .await
+            .expect("deprovision"),
+        "deprovision must unlink an existing SA"
+    );
+    assert_eq!(
+        fx.store()
+            .organization_of(&sa)
+            .await
+            .expect("org after deprovision"),
+        None
+    );
 }

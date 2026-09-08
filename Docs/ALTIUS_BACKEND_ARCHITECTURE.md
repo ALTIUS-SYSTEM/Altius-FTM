@@ -11,7 +11,7 @@ Last updated: 2026-09-08.
 | API service | Rust, Axum | REST `/api/v3`, authz, orchestration |
 | Identity | Keycloak | OIDC realm `altius`; clients `altius-web`, `altius-mobile` (PKCE), optional confidential agent client |
 | Transactional store | PostgreSQL | System of record (`STORE_BACKEND=postgres`, default) |
-| Graph store | TypeDB 3.x | Optional (`STORE_BACKEND=typedb`) |
+| Graph store | TypeDB 3.x | **Experimental** only (`STORE_BACKEND=typedb`). Not for production; task update/delete refuse with an explicit bail. |
 | Routing | Google Maps Platform | Directions, Distance Matrix, Geocoding, static maps (server-side keys only) |
 | Agent | OpenRouter tool loop | Dispatch suggestions with HITL gates |
 | Object store | S3-compatible | Media via presigned URLs (planned wiring) |
@@ -36,7 +36,7 @@ Schema: `backend/crates/altius-api/migrations/` (refinery). Design notes: [ALTIU
 - Core tables: organizations, hubs, users, teams, tasks, stops, device_events, daily_reports, costs, vehicle_checks, vehicles, devices, gps_observations, gps_reviews (+ join tables).
 - Idempotency: `UNIQUE (org_id, driver_sub, request_key)` on `device_events`.
 - Event ingest advances stop/task stage; null `stop_id` resolves to the first active stop.
-- TypeDB path remains available for inference experiments; not the default.
+- TypeDB path remains available for inference experiments; **experimental**, not the default. `update_task` / `delete_task` bail on TypeDB — leave that refusal in place.
 
 ## Sync contract (mobile ↔ API)
 
@@ -69,7 +69,7 @@ Broader historical/planned shapes: [ALTIUS_API_REFERENCE.md](./ALTIUS_API_REFERE
 
 ## Security posture
 
-- Secrets via env only (`KEYCLOAK_*`, `DATABASE_URL`, maps/agent keys; `TYPEDB_*` if typedb).
+- Secrets via env only (`KEYCLOAK_*`, `DATABASE_URL`, maps/agent keys; `TYPEDB_*` if typedb; `EVENTS_RETENTION_DAYS` for device-event prune, default 90).
 - Postgres TLS: `sslmode=require` → rustls + Mozilla roots; compose may use `sslmode=disable` on a private network.
 - CORS allowlist (`CORS_ORIGINS`) for Vercel origins; empty denies browser cross-origin.
 - Append-only events; 2 MiB body limit; security headers on responses.

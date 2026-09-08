@@ -6,7 +6,7 @@ use axum::routing::{get, put};
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
-use super::{AuthUser, org_of, require_admin, require_staff, store};
+use super::{AuthUser, org_of, require_admin, require_staff_or_integration, store};
 use crate::AppState;
 use crate::admin::{AdminClient, MANAGED_ROLES};
 use crate::error::{ApiError, ApiResult};
@@ -37,7 +37,7 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 async fn list_users(State(s): State<Arc<AppState>>, principal: AuthUser) -> ApiResult<Json<Value>> {
-    require_staff(&principal)?;
+    require_staff_or_integration(&principal)?;
     let org = org_of(&s, &principal.subject).await?;
     let users = store(&s)?
         .users_for_org(&org)
@@ -52,7 +52,7 @@ async fn list_drivers(
     State(s): State<Arc<AppState>>,
     principal: AuthUser,
 ) -> ApiResult<Json<Value>> {
-    require_staff(&principal)?;
+    require_staff_or_integration(&principal)?;
     let org = org_of(&s, &principal.subject).await?;
     let drivers = store(&s)?
         .drivers_for_org(&org)
@@ -88,6 +88,12 @@ async fn create_user_account(
     // One allowlist, shared with `set_user_roles`. A local copy drifted once
     // already: it omitted "super-admin" while the web form offered it, so the
     // dropdown produced a role the API rejected.
+    // `integration` is M2M-only — bind via POST /integrations, never here.
+    if req.realm_roles.iter().any(|r| r == "integration") {
+        return Err(ApiError::BadRequest(
+            "integration role is for service accounts; use POST /api/v3/integrations".into(),
+        ));
+    }
     if let Some(bad) = req
         .realm_roles
         .iter()
@@ -122,6 +128,7 @@ async fn create_user_account(
             &created.subject,
             req.display_name.trim(),
             req.realm_roles.first().map(String::as_str).unwrap_or("driver"),
+            Some(req.email.trim()),
         )
         .await
         .map_err(|e| {
@@ -160,6 +167,11 @@ async fn set_user_roles(
         .keycloak_admin
         .as_ref()
         .ok_or_else(|| ApiError::Unavailable("user provisioning is not configured".into()))?;
+    if req.roles.iter().any(|r| r == "integration") {
+        return Err(ApiError::BadRequest(
+            "integration role is for service accounts; use POST /api/v3/integrations".into(),
+        ));
+    }
     if let Some(bad) = req
         .roles
         .iter()

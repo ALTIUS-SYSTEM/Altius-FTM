@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use axum::routing::{delete, get, post};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
@@ -9,7 +9,7 @@ use super::{AuthUser, is_staff, org_of, require_staff, store};
 use crate::AppState;
 use crate::error::{ApiError, ApiResult};
 use crate::maps::{MAX_OPTIMIZE_WAYPOINTS, MapsClient};
-use altius_core::{Coordinate, DeviceEvent, Role, Task};
+use altius_core::{Coordinate, DeviceEvent, Role, StopAction, Task};
 
 #[derive(serde::Deserialize)]
 pub(crate) struct OptimizeRequest {
@@ -20,7 +20,10 @@ pub(crate) struct OptimizeRequest {
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v3/tasks", get(list_tasks))
-        .route("/api/v3/task/{id}", get(get_task).put(update_task).delete(delete_task))
+        .route(
+            "/api/v3/task/{id}",
+            get(get_task).put(update_task).delete(delete_task),
+        )
         .route("/api/v3/task-create", post(create_task))
         .route("/api/v3/events", post(sync_events))
         .route("/api/v3/route/optimize", post(optimize_route))
@@ -63,7 +66,8 @@ async fn get_task(
             return Err(ApiError::NotFound);
         }
     }
-    task.map(|t| Json(json!({ "data": t }))).ok_or(ApiError::NotFound)
+    task.map(|t| Json(json!({ "data": t })))
+        .ok_or(ApiError::NotFound)
 }
 
 async fn create_task(
@@ -155,6 +159,15 @@ async fn sync_events(
         if ev.tenant_id != scope.0 || ev.hub_id != scope.1 {
             return Err(ApiError::BadRequest(
                 "event tenant/hub scope mismatch".into(),
+            ));
+        }
+        // Mirror DeviceEventSchema.superRefine: skip requires a non-empty reason
+        // before we hit the DB CHECK (device_events_skip_requires_reason).
+        if matches!(ev.action, StopAction::Skip)
+            && ev.reason.as_ref().is_none_or(|r| r.trim().is_empty())
+        {
+            return Err(ApiError::BadRequest(
+                "skip action requires a non-empty reason".into(),
             ));
         }
     }

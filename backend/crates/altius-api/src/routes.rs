@@ -17,6 +17,7 @@ pub(crate) mod agent;
 pub(crate) mod auth;
 pub(crate) mod costs;
 pub(crate) mod hubs;
+pub(crate) mod integrations;
 pub(crate) mod maps;
 pub(crate) mod notify;
 pub(crate) mod tasks;
@@ -170,6 +171,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(auth::router())
         .merge(tasks::router())
         .merge(users::router())
+        .merge(integrations::router())
         .merge(teams::router())
         .merge(hubs::router())
         .merge(costs::router())

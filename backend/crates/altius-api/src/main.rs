@@ -168,8 +168,45 @@ async fn main() -> anyhow::Result<std::process::ExitCode> {
             client,
             store: Arc::new(store),
         };
+        let rx = shutdown_rx.clone();
         tokio::spawn(async move {
-            worker.run(shutdown_rx).await;
+            worker.run(rx).await;
+        });
+    }
+
+    // Device-event retention: independent of McEasy. Runs on Postgres even when
+    // the telematics worker is off. `EVENTS_RETENTION_DAYS=0` disables.
+    let events_retention_days = config.events_retention_days;
+    if events_retention_days > 0 {
+        let prune_store = store.clone();
+        let mut prune_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            // First tick after interval construction fires immediately — prune
+            // once at startup, then daily.
+            let mut tick = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+            loop {
+                tokio::select! {
+                    _ = prune_rx.changed() => break,
+                    _ = tick.tick() => {
+                        let boundary = chrono::Utc::now()
+                            - chrono::Duration::days(events_retention_days as i64);
+                        match prune_store.prune_device_events_older_than(boundary).await {
+                            Ok(n) if n > 0 => {
+                                tracing::info!(
+                                    deleted = n,
+                                    retention_days = events_retention_days,
+                                    "pruned device_events"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!(error = %e, "device_events prune failed");
+                            }
+                        }
+                    }
+                }
+            }
+            tracing::info!("device_events retention worker stopped");
         });
     }
 
@@ -191,7 +228,8 @@ async fn main() -> anyhow::Result<std::process::ExitCode> {
     });
 
     // Hold the shutdown sender in the main task. When the serve future returns,
-    // the sender is dropped and the watch channel fires, stopping the worker.
+    // the sender is dropped and the watch channel fires, stopping background
+    // workers (McEasy + device_events retention).
     let _shutdown_guard = shutdown_tx;
 
     let app = Router::new()

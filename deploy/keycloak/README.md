@@ -9,12 +9,65 @@ Imported by `docker compose` (`keycloak` service, `--import-realm`).
 | `altius-web` | public, PKCE | `http://localhost:3000/callback` (and `127.0.0.1`) |
 | `altius-mobile` | public, PKCE | `com.altius.altius_field:/oauthredirect` |
 | `altius-api` | bearer-only | Audience target for API JWT `aud` |
+| `altius-integration` | confidential, service accounts | Local M2M template (`client_credentials`); secret in realm JSON for **dev only** |
 
 The marketing landing app does **not** need a Keycloak client or redirect URI. It only deep-links to the web dashboard `/login`; PKCE and `redirect_uri` stay on the web origin.
 
 For deployed web hosts, add matching Valid Redirect URIs / Web Origins / post-logout URIs on `altius-web` (for example `https://<web-host>/callback`).
 
 **Realm import is first-boot only** — `--import-realm` skips a realm that already exists. After the first start, make changes in the admin console or re-import manually; editing this JSON has no effect on a running realm.
+
+## Realm roles (API mapping)
+
+| Realm role | API `Role` | Typical use |
+|------------|------------|-------------|
+| `super-admin` | `SuperAdmin` | Platform ops |
+| `admin` | `Admin` | Org admin / provisioning |
+| `supervisor` | `Supervisor` | Hub staff |
+| `lead` | `Lead` | Team lead |
+| `driver` | `Driver` | Field mobile |
+| `integration` | `Integration` | M2M service accounts |
+
+Tokens with **no** recognised realm role are rejected (`403`).
+
+## Machine-to-machine (client credentials)
+
+The API accepts Bearer tokens minted with Keycloak `grant_type=client_credentials` when the access token carries realm role **`integration`**. That role may call org-scoped **GET** allowlist routes only (`/tasks`, `/task/{id}`, `/drivers`, `/hubs`, `/reports`, `/costs`, `/users`). Writes, events, monitoring, and notify stay forbidden.
+
+Local realm import includes template client **`altius-integration`** (service accounts + audience mapper + SA user with `integration`). Production partners get **one confidential client per partner** (do not share the template secret).
+
+### Checklist (per partner / environment)
+
+1. Create a confidential client (or use `altius-integration` locally). Enable **Service accounts**; disable standard/direct flows.
+2. Assign realm role **`integration`** to the service-account user (`service-account-<clientId>`).
+3. Ensure an audience mapper emits `aud: altius-api`.
+4. Look up the service-account **`sub`** (admin console or decode a token).
+5. As an org admin, bind membership (Postgres only — no Keycloak Admin from this route):
+
+```bash
+curl -s -X POST 'http://127.0.0.1:8080/api/v3/integrations' \
+  -H "Authorization: Bearer <admin-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"subject":"<service-account-sub>","display_name":"Partner ETL","hub_id":"jakarta"}'
+```
+
+Also: `GET /api/v3/integrations`, `DELETE /api/v3/integrations/{sub}` (membership unlink; Keycloak role/client cleanup stays manual).
+
+6. Org scope comes from **membership** (`users` + `user_orgs`); do **not** rely on an `organization_id` claim. One service account → one org.
+
+Token request (local template):
+
+```bash
+curl -s -X POST \
+  'http://127.0.0.1:8081/realms/altius/protocol/openid-connect/token' \
+  -d 'grant_type=client_credentials' \
+  -d 'client_id=altius-integration' \
+  -d 'client_secret=altius-integration-local-secret'
+```
+
+Rotate that secret before any shared environment. OpenAPI documents M2M as `oauth2ClientCredentials`.
+
+**Admin provisioning** (`KEYCLOAK_ADMIN_CLIENT_ID` / `SECRET`) is a separate confidential client used by the API to call Keycloak Admin APIs — not the same as the integrator role above.
 
 ## Production / Vercel checklist
 
@@ -26,8 +79,9 @@ For deployed web hosts, add matching Valid Redirect URIs / Web Origins / post-lo
    - Valid post-logout redirect URIs: `https://<vercel-app>`
 4. Admin console is **not** proxied publicly — reach it via `ssh -L 8081:localhost:8081 <vps>` → `http://localhost:8081/admin`.
 5. Persistence: local default is `KC_DB=dev-file` (H2). For production set `KC_DB=postgres` (compose passes `KC_DB_URL`/`KC_DB_USERNAME`/`KC_DB_PASSWORD` pointing at the `postgres` service).
+6. For M2M in production: one confidential client per partner + `integration` role; rotate secrets; prefer short-lived client credentials tokens.
 
-Both public clients include an audience mapper so access tokens carry `aud: altius-api`, matching `KEYCLOAK_AUDIENCE` in compose / backend.
+Public clients and `altius-integration` include an audience mapper so access tokens carry `aud: altius-api`, matching `KEYCLOAK_AUDIENCE` in compose / backend.
 
 ## Local users (dev only)
 

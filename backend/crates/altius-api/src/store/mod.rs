@@ -1,8 +1,8 @@
 //! Persistence facade for the API.
 //!
 //! `Store` is the type the routes hold; it delegates to a concrete backend.
-//! `Postgres` is the default transactional store. `Typedb` is kept for
-//! relation/inference workloads that benefit from the graph model.
+//! `Postgres` is the default transactional store. `Typedb` is **experimental**
+//! (relation/inference only); task update/delete bail on that path.
 
 pub mod pg;
 pub mod typedb;
@@ -120,16 +120,54 @@ impl Store {
         subject: &str,
         display_name: &str,
         role: &str,
+        email: Option<&str>,
     ) -> anyhow::Result<()> {
         match self {
             Self::Postgres(s) => {
-                s.provision_user(org, hub, subject, display_name, role)
+                s.provision_user(org, hub, subject, display_name, role, email)
                     .await
             }
             Self::Typedb(s) => {
-                s.provision_user(org, hub, subject, display_name, role)
+                s.provision_user(org, hub, subject, display_name, role, email)
                     .await
             }
+        }
+    }
+
+    pub async fn provision_service_account(
+        &self,
+        org: &str,
+        subject: &str,
+        display_name: &str,
+        hub_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(s) => {
+                s.provision_service_account(org, subject, display_name, hub_id)
+                    .await
+            }
+            Self::Typedb(s) => {
+                s.provision_service_account(org, subject, display_name, hub_id)
+                    .await
+            }
+        }
+    }
+
+    pub async fn integrations_for_org(&self, org: &str) -> anyhow::Result<Vec<Value>> {
+        match self {
+            Self::Postgres(s) => s.integrations_for_org(org).await,
+            Self::Typedb(s) => s.integrations_for_org(org).await,
+        }
+    }
+
+    pub async fn deprovision_service_account(
+        &self,
+        org: &str,
+        subject: &str,
+    ) -> anyhow::Result<bool> {
+        match self {
+            Self::Postgres(s) => s.deprovision_service_account(org, subject).await,
+            Self::Typedb(s) => s.deprovision_service_account(org, subject).await,
         }
     }
 
@@ -338,6 +376,13 @@ impl Store {
         }
     }
 
+    pub async fn costs_for_org(&self, org: &str, day: Option<&str>) -> anyhow::Result<Vec<Value>> {
+        match self {
+            Self::Postgres(s) => s.costs_for_org(org, day).await,
+            Self::Typedb(s) => s.costs_for_org(org, day).await,
+        }
+    }
+
     pub async fn record_daily_report(
         &self,
         org: &str,
@@ -350,10 +395,42 @@ impl Store {
         }
     }
 
-    pub async fn reports_for_driver(&self, org: &str, driver_sub: &str) -> anyhow::Result<Vec<Value>> {
+    pub async fn reports_for_driver(
+        &self,
+        org: &str,
+        driver_sub: &str,
+    ) -> anyhow::Result<Vec<Value>> {
         match self {
             Self::Postgres(s) => s.reports_for_driver(org, driver_sub).await,
             Self::Typedb(s) => s.reports_for_driver(org, driver_sub).await,
+        }
+    }
+
+    pub async fn reports_for_org(&self, org: &str) -> anyhow::Result<Vec<Value>> {
+        match self {
+            Self::Postgres(s) => s.reports_for_org(org).await,
+            Self::Typedb(s) => s.reports_for_org(org).await,
+        }
+    }
+
+    pub async fn review_daily_report(
+        &self,
+        org: &str,
+        driver_sub: &str,
+        day: &str,
+        reviewer_sub: &str,
+        decision: &str,
+        note: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        match self {
+            Self::Postgres(s) => {
+                s.review_daily_report(org, driver_sub, day, reviewer_sub, decision, note)
+                    .await
+            }
+            Self::Typedb(s) => {
+                s.review_daily_report(org, driver_sub, day, reviewer_sub, decision, note)
+                    .await
+            }
         }
     }
 
@@ -473,6 +550,18 @@ impl Store {
         match self {
             Self::Postgres(s) => s.prune_gps_observations_older_than(boundary).await,
             Self::Typedb(s) => s.prune_gps_observations_older_than(boundary).await,
+        }
+    }
+
+    /// Delete `device_events` older than `boundary`. Postgres only; TypeDB
+    /// returns `0` (experimental backend has no retention worker).
+    pub async fn prune_device_events_older_than(
+        &self,
+        boundary: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<u64> {
+        match self {
+            Self::Postgres(s) => s.prune_device_events_older_than(boundary).await,
+            Self::Typedb(_) => Ok(0),
         }
     }
 }
