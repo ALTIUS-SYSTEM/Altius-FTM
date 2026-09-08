@@ -16,6 +16,7 @@
  *   ALTIUS_STRESS_HEALTH_DUR Health burst duration (default 15s)
  *   ALTIUS_STRESS_WRITES     "1" to enable local-only task-create (default off)
  *   ALTIUS_STRESS_SCENARIO   all | health | reads | writes (default all)
+ *   ALTIUS_STRESS_COLD_ITERS First N authenticated VU iterations tagged cold (default 20)
  */
 
 import http from "k6/http";
@@ -42,6 +43,12 @@ const statusBreakdown = new Counter("altius_http_status");
 const authFailures = new Counter("altius_auth_failures");
 const errorRate = new Rate("altius_errors");
 const latency = new Trend("altius_latency_ms", true);
+/** First N authenticated VU iterations (JWKS / pool cold path). */
+const coldAuthLatency = new Trend("altius_auth_cold_ms", true);
+/** Steady-state authenticated requests after the cold window. */
+const warmAuthLatency = new Trend("altius_auth_warm_ms", true);
+/** How many early authenticated iterations count as "cold" (default 20). */
+const COLD_AUTH_ITERS = Number(__ENV.ALTIUS_STRESS_COLD_ITERS || 20);
 
 function want(name) {
   if (SCENARIO === "all") return true;
@@ -115,13 +122,32 @@ export const options = {
   summaryTrendStats: ["avg", "min", "med", "p(90)", "p(95)", "p(99)", "max"],
 };
 
-function record(res) {
+/**
+ * Record status/error + overall latency. When `phase` is `"cold"` or `"warm"`,
+ * also feed the matching auth-phase trend (first JWKS / pool hits vs steady).
+ */
+function record(res, phase) {
   const code = String(res.status || 0);
   statusBreakdown.add(1, { status: code });
-  latency.add(res.timings.duration);
+  const ms = res.timings.duration;
+  latency.add(ms);
+  if (phase === "cold") coldAuthLatency.add(ms);
+  else if (phase === "warm") warmAuthLatency.add(ms);
   const failed = res.status < 200 || res.status >= 400;
   errorRate.add(failed);
   return !failed;
+}
+
+/**
+ * Approximate global first-N cold window using per-VU `__ITER`.
+ * (k6 VUs do not share mutable JS state.)
+ */
+function authPhase() {
+  const perVu = Math.max(
+    1,
+    Math.ceil(COLD_AUTH_ITERS / Math.max(VUS, 1)),
+  );
+  return __ITER < perVu ? "cold" : "warm";
 }
 
 function authHeaders(token) {
@@ -227,29 +253,34 @@ export function authenticatedReads(data) {
     return;
   }
   const headers = authHeaders(token);
+  const phase = authPhase();
+  const tags = { scenario: "reads", auth_phase: phase };
 
   group("authenticated GETs", () => {
-    const me = http.get(`${API}/auth/me`, { headers });
-    record(me);
+    const me = http.get(`${API}/auth/me`, { headers, tags });
+    record(me, phase);
     check(me, { "auth/me 200": (r) => r.status === 200 });
 
-    const tasks = http.get(`${API}/tasks`, { headers });
-    record(tasks);
+    const tasks = http.get(`${API}/tasks`, { headers, tags });
+    record(tasks, phase);
     check(tasks, { "tasks 200": (r) => r.status === 200 });
 
-    const hubs = http.get(`${API}/hubs`, { headers });
-    record(hubs);
+    const hubs = http.get(`${API}/hubs`, { headers, tags });
+    record(hubs, phase);
     check(hubs, { "hubs 200": (r) => r.status === 200 });
 
-    const drivers = http.get(`${API}/drivers`, { headers });
-    record(drivers);
+    const drivers = http.get(`${API}/drivers`, { headers, tags });
+    record(drivers, phase);
     check(drivers, { "drivers 200": (r) => r.status === 200 });
 
     const ids = data.taskIds || [];
     if (ids.length > 0) {
       const id = ids[Math.floor(Math.random() * ids.length)];
-      const one = http.get(`${API}/task/${encodeURIComponent(id)}`, { headers });
-      record(one);
+      const one = http.get(`${API}/task/${encodeURIComponent(id)}`, {
+        headers,
+        tags,
+      });
+      record(one, phase);
       check(one, {
         "task/{id} 200|404": (r) => r.status === 200 || r.status === 404,
       });

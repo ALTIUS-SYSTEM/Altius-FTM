@@ -41,7 +41,24 @@ if [[ "$ready_code" != "200" ]]; then
   exit 3
 fi
 
-# Optional token mint: prefer explicit JWT, else API password grant (local only).
+# Optional token mint (local only). Prefer explicit JWT, then Keycloak
+# client_credentials (altius-integration), then API password grant.
+KC_TOKEN_URL="${ALTIUS_STRESS_KC_TOKEN_URL:-http://127.0.0.1:8081/realms/altius/protocol/openid-connect/token}"
+KC_CLIENT_ID="${ALTIUS_STRESS_KC_CLIENT_ID:-altius-integration}"
+KC_CLIENT_SECRET="${ALTIUS_STRESS_KC_CLIENT_SECRET:-altius-integration-local-secret}"
+
+if [[ -z "${ALTIUS_STRESS_TOKEN:-}" && "${ALTIUS_STRESS_M2M:-1}" != "0" ]]; then
+  echo "==> Minting token via Keycloak client_credentials ($KC_CLIENT_ID)…"
+  tok_json="$(curl -sS -X POST "$KC_TOKEN_URL" \
+    -d "grant_type=client_credentials" \
+    -d "client_id=${KC_CLIENT_ID}" \
+    -d "client_secret=${KC_CLIENT_SECRET}" || true)"
+  ALTIUS_STRESS_TOKEN="$(printf '%s' "$tok_json" | sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  if [[ -z "$ALTIUS_STRESS_TOKEN" ]]; then
+    echo "M2M token mint failed (Keycloak down or client misconfigured). Body (truncated): ${tok_json:0:240}" >&2
+  fi
+fi
+
 if [[ -z "${ALTIUS_STRESS_TOKEN:-}" && -n "${ALTIUS_STRESS_USER:-}" && -n "${ALTIUS_STRESS_PASSWORD:-}" ]]; then
   echo "==> Minting token via POST $API/auth/login (ALLOW_PASSWORD_GRANT must be true)…"
   tok_json="$(curl -sS -X POST "$API/auth/login" \
