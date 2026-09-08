@@ -1,8 +1,46 @@
 # Altius FTM — API Endpoint Reference
 
-> **Product:** Altius FTM (Fleet & Transport Management)
+> **Product:** Altius FTM (Fleet & Transport Management)  
+> **Package:** `com.altius.altius_field`  
 > **Base URL:** `{BASE_URL}/api/v3`  
-> **Date:** 2026-09-07  
+> **Auth (production):** Keycloak OIDC Bearer (RS256) — see § Implemented surface  
+> **Date:** 2026-09-08  
+
+This document describes the Altius FTM HTTP API. **Section 0** lists routes
+implemented in [`backend/`](../backend/). Later sections retain the broader
+product surface (including flows still planned or client-local).
+
+---
+
+## 0. Implemented surface (`backend/`)
+
+Prefer these when integrating web, mobile, or Vercel → VPS.
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `/health` | — | Liveness |
+| GET | `/ready` | — | Readiness (503 if persistence down) |
+| POST | `/auth/login` | — | Password grant only if explicitly enabled |
+| POST | `/auth/refresh` | — | Refresh token exchange |
+| GET | `/auth/me` | Bearer | Subject, roles, org/hub scope |
+| GET | `/tasks` | Bearer | Tenant-scoped task list + stops |
+| GET | `/task/{id}` | Bearer | Single task + stops |
+| PUT | `/task/{id}` | Bearer (staff) | Update task; org from JWT |
+| POST | `/task-create` | Bearer (staff) | Create task + stops under caller hub |
+| POST | `/events` | Bearer (driver) | Idempotent outbox sync; receipts include `event_id` |
+| POST | `/route/optimize` | Bearer | Stop order optimization |
+| POST | `/route/eta` | Bearer | Directions ETA or schematic fallback |
+| POST | `/route/geocode` | Bearer | Address → coordinate |
+| POST | `/route/static-map` | Bearer | Server-proxied static map |
+| POST | `/places/autocomplete` | Bearer | Place suggestions |
+| GET/POST | `/users`, `/drivers`, hubs, teams, … | Bearer | Roster / org admin |
+| GET/POST | `/reports`, `/costs`, `/vehicle-checks` | Bearer | LHS / costs |
+| GET/POST | `/monitoring/*` | Bearer | Vehicles, GPS reviews, McEasy hooks |
+| POST | `/notify/*` | Bearer | SMS / WhatsApp / push (provider-gated) |
+| POST | `/agent/dispatch-suggestion`, `/agent/resume` | Bearer (staff) | HITL agent loop |
+
+**Mobile sync:** match receipts by `event_id` / `server_event_id`, never by array index.  
+**Web:** set `NEXT_PUBLIC_API_BASE` + Keycloak public client `altius-web`.
 
 ---
 
@@ -619,48 +657,23 @@ Returns web content URL or HTML for in-app WebView rendering.
 
 ---
 
-## 23. Obfuscated Endpoints
+## API Authentication (production)
 
-The following endpoints were extracted but their purpose is not clearly identified. They are likely internal API paths, short codes, or encoded identifiers:
+Production clients use **Keycloak OIDC** (not password OTP) as the primary gate:
 
-| Endpoint | Possible Purpose |
-|---|---|
-| `/akn` | Unknown |
-| `/c2q` | Unknown |
-| `/cNr` | Unknown |
-| `/gt4` | Unknown |
-| `/iog` | Unknown |
-| `/jzJ` | Unknown |
-| `/l4d` | Unknown |
-| `/mb4` | Unknown |
-| `/mpF` | Unknown |
-| `/oIn` | Unknown |
-| `/sSp` | Unknown |
-| `/v4b` | Unknown |
-| `/xEW` | Unknown |
-| `/zmB` | Unknown |
-| `/secretH` | Unknown (possibly secret/health check) |
-| `/last` | Last visited page or last sync timestamp |
-| `/trk` | Tracking endpoint |
-| `/barcode` | Barcode scan result submission |
-
----
-
-## API Authentication
-
-All API requests (except `/auth`, `/otp/send`, `/user/forgot-password`) require:
+1. Browser / app → Keycloak authorization code + PKCE (`altius-web` / `altius-mobile`)
+2. Exchange → access token (+ refresh on mobile; secure storage)
+3. `Authorization: Bearer <access_token>` on `/api/v3/*`
+4. Optional: `GET /api/v3/auth/me` to hydrate org/hub/role
 
 ```
-Authorization: Bearer {jwt_token}
+Authorization: Bearer {access_token}
 ```
 
-The token is obtained from:
-1. `POST /auth` (login)
-2. `POST /otp/verify` (OTP verification)
-3. `POST /cloud-authenticator/verify` (TOTP verification)
-4. `POST /organization/switch` (org switch returns new token)
+OTP / cloud-authenticator routes elsewhere in this document are optional tenant
+policy features and are secondary to Keycloak in the reference deployment.
 
-Token is stored locally via `SaveTokenToLocalUseCase` and retrieved via `GetTokenFromLocalUseCase`.
+Token refresh: mobile uses AppAuth refresh; web may re-enter PKCE (memory-held access tokens).
 
 ---
 

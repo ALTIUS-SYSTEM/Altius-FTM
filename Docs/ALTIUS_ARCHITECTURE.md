@@ -2,9 +2,11 @@
 ## Comprehensive Technical Architecture Documentation
 
 > **Document Status:** Product architecture  
+> **Product:** Altius FTM (Fleet & Transport Management)  
 > **Package:** `com.altius.altius_field`  
 > **Brand:** Altius  
-> **Date:** 2026-09-07  
+> **Date:** 2026-09-08  
+> **Backend:** [`ALTIUS_BACKEND_ARCHITECTURE.md`](./ALTIUS_BACKEND_ARCHITECTURE.md) · [`ALTIUS_DATABASE_DESIGN.md`](./ALTIUS_DATABASE_DESIGN.md)  
 
 ---
 
@@ -33,21 +35,21 @@
 
 ## 1. Executive Summary
 
-Altius FTM is a **Flutter-based field worker management application** developed by Altius. The application enables organizations to manage field operations including task assignment, check-in/check-out with geofencing, route optimization, multi-component task execution (photo, video, voice, barcode, bill, OTP, signature, print), offline-first synchronization, and real-time location tracking.
+Altius FTM is a **Flutter-based field operations platform** developed by Altius (PT Antero Daemon Technologies). It enables organizations to manage fleet and transport field work: task assignment, check-in/check-out with geofencing, route planning, multi-step stop execution, offline-first synchronization, and GPS anomaly review.
 
-The system follows a **Clean Architecture** pattern with three layers (domain, data, presentation) and uses **Cubit (Bloc)** for state management. The application supports multi-tenant isolation through build-time flavors and runtime organization switching.
+The mobile client follows **Clean Architecture** (domain / data / presentation) with **Cubit (Bloc)** state management. The operations web app is Next.js; the API is Rust (Axum) with Keycloak and PostgreSQL.
 
 | Attribute | Value |
 |---|---|
 | Package | `com.altius.altius_field` |
-| Version | 1.40.8 (code 3790) |
-| Framework | Flutter (Dart AOT) |
-| Min SDK | 23 (Android 6.0) |
-| Target SDK | 36 (Android 16) |
-| Architecture | arm64-v8a |
-| State Management | Cubit (flutter_bloc) + Freezed |
-| Architecture Pattern | Clean Architecture |
-| Routing | flutter_modular |
+| Product line | Altius FTM — Fleet & Transport Management |
+| Mobile | Flutter (offline-first SQLite + outbox) |
+| Web | Next.js 15 (Vercel) |
+| API | Rust / Axum `/api/v3` (VPS) |
+| Identity | Keycloak OIDC (PKCE) |
+| Primary store | PostgreSQL |
+| Languages | 7 (en, id, th, ja, zh, fil-PH, vi) |
+| Architecture Pattern | Clean Architecture + Cubit (mobile) |
 | Local DB | SQLite (drift/sqflite) + Hive |
 | Maps | Google Maps Flutter |
 | Camera | Flutter Camera plugin |
@@ -1134,9 +1136,9 @@ Build Flavor / Environment
 | Shared Auth Token | Inferred | QR login implies shared session/token |
 | Direct API Calls | Unconfirmed | No evidence of mobile calling web app API directly |
 
-### 14.2 Web App Extraction Status
+### 14.2 Web application
 
-**The web application source was NOT extracted.** The `web/` directory in the APK contains Flutter application assets (fonts, icons, images, translations), not web application code. No `index.html`, JavaScript bundles, CSS, or web framework output was found.
+The operations web app lives in [`apps/web`](../apps/web) (Next.js App Router). It talks to the same `/api/v3` backend as mobile when `NEXT_PUBLIC_API_BASE` and Keycloak are configured. Deploy target: **Vercel**. Marketing site: [`apps/landing`](../apps/landing).
 
 ---
 
@@ -1261,7 +1263,7 @@ Total: 614 translation keys per language, organized into 3 sections:
 | 13 task component types | Confirmed | Component package paths |
 | 114 use cases | Confirmed | Use case class enumeration |
 | 60+ domain entities | Confirmed | Entity class enumeration |
-| 8 build flavors | Confirmed | Environment file extraction |
+| 8 environment flavors | Confirmed | Build-time env catalogs + runtime org switch |
 | Shared backend API | Confirmed | Environment files show API + web origin pairs |
 | QR login bridge | Confirmed | LoginWithTokenUseCase + ProfileQRPage |
 | WebView embed | Confirmed | WebViewPage + /web-view route + WebView classes |

@@ -1,7 +1,9 @@
 # Altius FTM — Pseudocode
 
-> **Product:** Altius FTM (Fleet & Transport Management)
-> **Date:** 2026-09-07  
+> **Product:** Altius FTM (Fleet & Transport Management)  
+> **Package:** `com.altius.altius_field`  
+> **Date:** 2026-09-08  
+> **Related:** [ALTIUS_BACKEND_ARCHITECTURE.md](./ALTIUS_BACKEND_ARCHITECTURE.md) (Keycloak + sync)  
 
 ---
 

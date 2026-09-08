@@ -1,7 +1,9 @@
 # Altius FTM — UI Breakdown (Mobile & Web)
 
-> **Product:** Altius FTM (Fleet & Transport Management)
-> **Date:** 2026-09-07  
+> **Product:** Altius FTM (Fleet & Transport Management)  
+> **Package:** `com.altius.altius_field`  
+> **Date:** 2026-09-08  
+> **Apps:** `apps/mobile` (Flutter), `apps/web` (Next.js), `apps/landing` (Next.js)  
 
 ---
 

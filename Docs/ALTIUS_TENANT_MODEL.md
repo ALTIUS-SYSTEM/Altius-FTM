@@ -1,7 +1,9 @@
 # Altius FTM — Tenant Model
 
-> **Product:** Altius FTM (Fleet & Transport Management)
-> **Date:** 2026-09-07  
+> **Product:** Altius FTM (Fleet & Transport Management)  
+> **Package:** `com.altius.altius_field`  
+> **Date:** 2026-09-08  
+> **Identity:** Keycloak realm roles + Postgres membership (`user_orgs` / `user_hubs`)  
 
 ---
 

@@ -1,8 +1,9 @@
 # Altius FTM — Database Design (PostgreSQL)
 
-> **Source of truth:** `backend/crates/altius-api/migrations/` (refinery, applied by `PgStore::migrate`)
-> **Kontrak domain:** `packages/api-contracts/src/*.ts` (Zod) ↔ `backend/crates/altius-core/src/lib.rs` (Rust, 1:1)
-> **Tanggal:** 2026-09-08 — mengikuti V1__init, V2__gps, V3__contract_integrity
+> **Product:** Altius FTM (Fleet & Transport Management)  
+> **Source of truth:** `backend/crates/altius-api/migrations/` (refinery, applied by `PgStore::migrate`)  
+> **Domain contracts:** `packages/api-contracts` (Zod) ↔ `backend/crates/altius-core` (Rust)  
+> **Date:** 2026-09-08 — V1__init, V2__gps, V3__contract_integrity  
 
 Dokumen ini adalah desain skema PostgreSQL untuk Altius FTM. Invariant didefinisikan
 oleh kontrak API (`api-contracts`); skema menegakkannya di level database, bukan
