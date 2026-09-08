@@ -376,7 +376,7 @@ async fn drive(
                 // The assistant message already lists every call in this step;
                 // calls after the paused one still need a tool result or the
                 // resumed transcript is malformed for the next upstream turn.
-                while let Some((_, rest)) = iter.next() {
+                for (_, rest) in iter.by_ref() {
                     messages.push(Message {
                         role: "tool".into(),
                         content: Some(

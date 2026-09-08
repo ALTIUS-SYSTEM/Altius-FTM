@@ -188,7 +188,6 @@ impl<'a> AdminClient<'a> {
         Ok(())
     }
 
-    #[allow(dead_code)]
     /// Replace a user's realm roles with exactly `roles`.
     ///
     /// This is what "permission management" means here: the API authorizes on

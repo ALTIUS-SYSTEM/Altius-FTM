@@ -101,6 +101,14 @@ async fn create_user_account(
     {
         return Err(ApiError::BadRequest(format!("unsupported role: {bad}")));
     }
+    // Do not invent a cached "driver" role when none were requested — the roster
+    // would claim driver while the token carries no fleet role (and auth would
+    // forbid the principal). Require an explicit grant.
+    if req.realm_roles.is_empty() {
+        return Err(ApiError::BadRequest(
+            "at least one realm role is required".into(),
+        ));
+    }
 
     // Scope comes from the caller's token, never the request body.
     let (org, own_hub) = store(&s)?
@@ -127,7 +135,7 @@ async fn create_user_account(
             &hub,
             &created.subject,
             req.display_name.trim(),
-            req.realm_roles.first().map(String::as_str).unwrap_or("driver"),
+            req.realm_roles[0].as_str(),
             Some(req.email.trim()),
         )
         .await
