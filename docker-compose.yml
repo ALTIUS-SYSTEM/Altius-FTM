@@ -37,14 +37,17 @@ services:
       dockerfile: Dockerfile
     environment:
       BIND: 0.0.0.0:8080
-      TYPEDB_SERVER: typedb:1729
-      TYPEDB_DB_NAME: altius
+      TYPEDB_ADDRESS: ${TYPEDB_ADDRESS:-typedb:1729}
+      TYPEDB_USERNAME: ${TYPEDB_USERNAME:-admin}
+      TYPEDB_PASSWORD: ${TYPEDB_PASSWORD:-password}
+      TYPEDB_DATABASE: ${TYPEDB_DATABASE:-altius}
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8081/realms/altius}
       KEYCLOAK_JWKS_URL: ${KEYCLOAK_JWKS_URL:-http://keycloak:8081/realms/altius/protocol/openid-connect/certs}
       KEYCLOAK_TOKEN_URL: ${KEYCLOAK_TOKEN_URL:-http://keycloak:8081/realms/altius/protocol/openid-connect/token}
       KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-altius-api}
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-altius-api}
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      AGENT_STATE_SECRET: ${AGENT_STATE_SECRET}
       KEYCLOAK_REDIRECT_URI: ${KEYCLOAK_REDIRECT_URI:-http://localhost:3000/api/auth/callback/keycloak}
       KEYCLOAK_LOGOUT_REDIRECT_URI: ${KEYCLOAK_LOGOUT_REDIRECT_URI:-http://localhost:3000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:8080}
@@ -80,9 +83,10 @@ services:
       dockerfile: apps/web/Dockerfile
     environment:
       NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8080}
-      NEXT_PUBLIC_KEYCLOAK_ISSUER: ${NEXT_PUBLIC_KEYCLOAK_ISSUER:-http://localhost:8081/realms/altius}
+      # auth.ts reads URL + REALM and builds the issuer itself.
+      NEXT_PUBLIC_KEYCLOAK_URL: ${NEXT_PUBLIC_KEYCLOAK_URL:-http://localhost:8081}
+      NEXT_PUBLIC_KEYCLOAK_REALM: ${NEXT_PUBLIC_KEYCLOAK_REALM:-altius}
       NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: ${NEXT_PUBLIC_KEYCLOAK_CLIENT_ID:-altius-web}
-      NEXT_PUBLIC_KEYCLOAK_REDIRECT_URI: ${NEXT_PUBLIC_KEYCLOAK_REDIRECT_URI:-http://localhost:3000/api/auth/callback/keycloak}
     ports:
       - "3000:3000"
 
