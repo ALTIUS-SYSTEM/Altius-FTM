@@ -147,7 +147,7 @@ The backend is a RESTful API served at `/api/v3` with environment-specific hosts
 
 ### 3.2 Backend Service Areas
 
-Based on extracted endpoints and use cases, the backend provides these service areas:
+The backend (`backend/`) provides these service areas:
 
 ```
 Backend API (/api/v3)
@@ -621,7 +621,7 @@ The application uses a local SQLite database for offline-first operation. Based 
 
 ### 6.2 Remote Database (Inferred)
 
-The backend database (not extracted) is inferred to contain:
+The PostgreSQL schema (see ALTIUS_DATABASE_DESIGN.md) contains:
 
 - `users` — global user accounts
 - `organizations` — tenant organizations
@@ -1276,8 +1276,8 @@ Total: 614 translation keys per language, organized into 3 sections:
 | Web app built with Flutter Web | Inferred | Shared assets in flutter_assets/web/ |
 | WebView uses WEB_ORIGIN | Inferred | Not found as direct literal in libapp.so |
 | Mobile and web share session | Inferred | QR login implies shared auth |
-| Backend database schema | Inferred | Entity analysis, not directly extracted |
-| Web app source code | Not Extracted | No web bundle found in APK |
+| Backend database schema | Confirmed | `backend/crates/altius-api/migrations/` |
+| Web app source code | Confirmed | `apps/web` (Next.js) |
 
 ---
 

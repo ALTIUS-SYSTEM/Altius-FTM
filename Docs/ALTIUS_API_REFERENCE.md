@@ -10,6 +10,9 @@ This document describes the Altius FTM HTTP API. **Section 0** lists routes
 implemented in [`backend/`](../backend/). Later sections retain the broader
 product surface (including flows still planned or client-local).
 
+**Machine-readable spec:** [openapi/altius-ftm-v3.openapi.yaml](./openapi/altius-ftm-v3.openapi.yaml) (OpenAPI 3.0.3).  
+**Integrator guide:** [ALTIUS_API_GUIDE.md](./ALTIUS_API_GUIDE.md).
+
 ---
 
 ## 0. Implemented surface (`backend/`)
@@ -40,7 +43,8 @@ Prefer these when integrating web, mobile, or Vercel → VPS.
 | POST | `/agent/dispatch-suggestion`, `/agent/resume` | Bearer (staff) | HITL agent loop |
 
 **Mobile sync:** match receipts by `event_id` / `server_event_id`, never by array index.  
-**Web:** set `NEXT_PUBLIC_API_BASE` + Keycloak public client `altius-web`.
+**Web:** set `NEXT_PUBLIC_API_BASE` + Keycloak public client `altius-web`.  
+**OpenAPI:** [openapi/altius-ftm-v3.openapi.yaml](./openapi/altius-ftm-v3.openapi.yaml).
 
 ---
 
@@ -68,7 +72,6 @@ Prefer these when integrating web, mobile, or Vercel → VPS.
 20. [Webhook API](#20-webhook-api)
 21. [Maps API](#21-maps-api)
 22. [WebView API](#22-webview-api)
-23. [Obfuscated Endpoints](#23-obfuscated-endpoints)
 
 ---
 
@@ -558,7 +561,7 @@ Submit troubleshooting report.
   "api_connection": true,
   "download_connection": true,
   "upload_connection": true,
-  "app_version": "1.40.8",
+  "app_version": "0.1.0",
   "min_version": "1.35.0",
   "device_info": { ... },
   "screenshot": "image_url"
@@ -679,7 +682,7 @@ Token refresh: mobile uses AppAuth refresh; web may re-enter PKCE (memory-held a
 
 ## API Error Handling
 
-Based on extracted UI labels, the API returns standard HTTP status codes:
+The API returns standard HTTP status codes:
 
 | Status | Message Key | Description |
 |---|---|---|
@@ -718,22 +721,20 @@ Based on extracted UI labels, the API returns standard HTTP status codes:
 
 ## API Sync Strategy
 
-The mobile app uses an **offline-first** strategy:
+The mobile app uses an **offline-first** strategy (see `WorkStore` + `SyncService`):
 
 ```
-1. READ: Local DB → if empty/stale → Remote API → save to local
-2. WRITE: Save to local → mark unsynced → queue for sync
-3. SYNC: Upload unsynced data → mark as synced → handle failures
-4. VERSION: Check version → if changed → re-download reference data
+1. READ:  GET /tasks → upsert local SQLite (incl. stop_id)
+2. WRITE: Append immutable outbox events locally
+3. SYNC:  POST /events → match receipts by event_id / server_event_id
+4. PULL:  GET /tasks again so the board matches server stage
 ```
 
 Sync triggers:
-- Pull-to-refresh on task list
-- After task completion
-- After check-in/check-out
-- App foreground (lifecycle watcher)
-- Manual sync from settings
-- Background sync (scheduled)
+- After login / Keycloak hydrate
+- Connectivity restored / WorkManager background
+- Manual sync
+- After push of pending outbox
 
 ---
 

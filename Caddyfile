@@ -8,7 +8,6 @@
 # stock image — see the `caddy` service in docker-compose.yml, which builds it
 # in. Without that build the `rate_limit` directives below fail to parse, so
 # keep the two in step.
-
 {
 	admin off
 	servers {

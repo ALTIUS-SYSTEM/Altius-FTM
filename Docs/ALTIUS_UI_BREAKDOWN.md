@@ -149,13 +149,10 @@ Framework: `flutter_modular`
 | `/store/apps/details` | PlayStorePage | App store link |
 | `/to/` | WebhookTarget | Webhook target |
 
-#### Obfuscated Routes (likely internal)
+#### Internal routes
 
-| Route | Likely Purpose |
-|---|---|
-| `/akn`, `/c2q`, `/cNr`, `/gt4`, `/iog`, `/jzJ`, `/l4d`, `/mb4`, `/mpF`, `/oIn`, `/sSp`, `/v4b`, `/xEW`, `/zmB`, `/secretH` | Internal/obfuscated routes |
+Reserved / experimental deep links may appear in navigation tables; they are not part of the public product surface.
 
----
 
 ## 3. Screen Hierarchy
 
@@ -587,7 +584,7 @@ class TaskDoingState with _$TaskDoingState {
 
 ## 8. Web App UI Structure (Inferred)
 
-> **Status: INFERRED** — Web app source not extracted. Reconstructed from shared assets, translation files, and backend API.
+> **Status:** Implemented in `apps/web` (Next.js). Deployed to Vercel; shares `/api/v3` with mobile.
 
 ### 8.1 Web App Hierarchy
 

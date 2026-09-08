@@ -14,6 +14,8 @@ Product monorepo for Altius FTM: driver mobile app, operations dashboard, market
 | [ALTIUS_DATABASE_DESIGN.md](./Docs/ALTIUS_DATABASE_DESIGN.md) | PostgreSQL schema & invariants |
 | [ALTIUS_ARCHITECTURE.md](./Docs/ALTIUS_ARCHITECTURE.md) | End-to-end system architecture |
 | [ALTIUS_API_REFERENCE.md](./Docs/ALTIUS_API_REFERENCE.md) | REST `/api/v3` reference (implemented + planned) |
+| [ALTIUS_API_GUIDE.md](./Docs/ALTIUS_API_GUIDE.md) | Integrator guide (auth, conventions, flows) |
+| [openapi/altius-ftm-v3.openapi.yaml](./Docs/openapi/altius-ftm-v3.openapi.yaml) | OpenAPI 3.0.3 (implemented surface) |
 | [ALTIUS_UI_BREAKDOWN.md](./Docs/ALTIUS_UI_BREAKDOWN.md) | Mobile & web UI structure |
 | [ALTIUS_TENANT_MODEL.md](./Docs/ALTIUS_TENANT_MODEL.md) | Org / hub / role / environments |
 | [ALTIUS_PSEUDOCODE.md](./Docs/ALTIUS_PSEUDOCODE.md) | Core operational flows |
