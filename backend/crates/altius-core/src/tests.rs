@@ -137,3 +137,81 @@ fn skip_only_from_pending() {
     assert!(check_transition(StopStatus::Pending, StopAction::Skip).is_ok());
     assert!(check_transition(StopStatus::Arrived, StopAction::Skip).is_err());
 }
+
+fn task_with(day: Option<&str>, time: Option<&str>) -> Task {
+    Task {
+        id: "t1".into(),
+        tenant_id: "org".into(),
+        hub_id: "hub".into(),
+        title: "Deliver".into(),
+        status: TaskStatus::Assigned,
+        assignee_id: None,
+        stops: vec![],
+        created_at: Utc::now(),
+        day: day.map(str::to_string),
+        start_time: time.map(str::to_string),
+        flow: None,
+        priority: TaskPriority::Normal,
+        notes: None,
+    }
+}
+
+#[test]
+fn schedule_accepts_a_well_formed_day_and_time() {
+    assert!(task_with(Some("2026-09-09"), Some("08:30")).validate_schedule().is_ok());
+    // Both are optional: a task with no schedule is still a valid task.
+    assert!(task_with(None, None).validate_schedule().is_ok());
+}
+
+#[test]
+fn schedule_rejects_free_text_dates_and_times() {
+    // These are stored as TEXT, so without validation any of them would reach
+    // the mobile app and the CSV export intact.
+    for bad in ["09/09/2026", "2026-9-9", "2026-09-09T00:00:00Z", "tomorrow", ""] {
+        assert!(
+            task_with(Some(bad), None).validate_schedule().is_err(),
+            "day {bad:?} should be rejected"
+        );
+    }
+    for bad in ["8:30", "08:30:00", "24:00", "08:60", "0830", ""] {
+        assert!(
+            task_with(None, Some(bad)).validate_schedule().is_err(),
+            "start_time {bad:?} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn schedule_bounds_flow_and_notes() {
+    let mut t = task_with(None, None);
+    t.notes = Some("x".repeat(MAX_TASK_NOTES));
+    assert!(t.validate_schedule().is_ok());
+    t.notes = Some("x".repeat(MAX_TASK_NOTES + 1));
+    assert!(t.validate_schedule().is_err());
+
+    let mut t = task_with(None, None);
+    t.flow = Some("x".repeat(MAX_TASK_FLOW));
+    assert!(t.validate_schedule().is_ok());
+    t.flow = Some("x".repeat(MAX_TASK_FLOW + 1));
+    assert!(t.validate_schedule().is_err());
+}
+
+#[test]
+fn scheduled_day_falls_back_to_the_creation_date() {
+    let t = task_with(Some("2026-01-02"), None);
+    assert_eq!(t.scheduled_day(), "2026-01-02");
+    let t = task_with(None, None);
+    assert_eq!(t.scheduled_day(), Utc::now().date_naive().to_string());
+}
+
+#[test]
+fn task_deserializes_without_the_schedule_fields() {
+    // Clients written before these existed still post the old shape; a task
+    // that fails to deserialize would be a hard break, not a missing field.
+    let json = r#"{"id":"t1","tenant_id":"o","hub_id":"h","title":"x",
+        "status":"assigned","assignee_id":null,"stops":[],
+        "created_at":"2026-09-09T00:00:00Z"}"#;
+    let t: Task = serde_json::from_str(json).expect("old payload must still parse");
+    assert!(t.day.is_none());
+    assert_eq!(t.priority, TaskPriority::Normal);
+}

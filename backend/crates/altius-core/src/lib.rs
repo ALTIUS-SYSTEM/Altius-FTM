@@ -90,6 +90,14 @@ pub struct Stop {
     pub service_seconds: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskPriority {
+    #[default]
+    Normal,
+    High,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Task {
@@ -101,6 +109,81 @@ pub struct Task {
     pub assignee_id: Option<Id>,
     pub stops: Vec<Stop>,
     pub created_at: DateTime<Utc>,
+    /// Scheduled day, `YYYY-MM-DD`. Absent means "the day it was created",
+    /// which is what the column held before dispatch could choose a date.
+    #[serde(default)]
+    pub day: Option<String>,
+    /// Planned start, `HH:MM` on `day`.
+    #[serde(default)]
+    pub start_time: Option<String>,
+    /// Workflow label the operator picked (Delivery, Pickup, …). Free text:
+    /// the set is a dispatch convention, not something the API constrains.
+    #[serde(default)]
+    pub flow: Option<String>,
+    #[serde(default)]
+    pub priority: TaskPriority,
+    /// Instructions for the driver. Bounded because it reaches the mobile app
+    /// and a daily report; unbounded free text here would ride along into both.
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// Longest accepted `notes`. Matches the mobile report field so a task's
+/// instructions can always be quoted back in an LHS entry.
+pub const MAX_TASK_NOTES: usize = 2000;
+/// Longest accepted `flow` label.
+pub const MAX_TASK_FLOW: usize = 64;
+
+impl Task {
+    /// Reject shapes the database would accept but the product cannot use.
+    ///
+    /// Called on every write path. `day` and `start_time` are stored as text,
+    /// so without this a client could put anything in them and every consumer —
+    /// the mobile app, CSV export, the LHS aggregation — would inherit it.
+    pub fn validate_schedule(&self) -> Result<(), String> {
+        if let Some(day) = &self.day {
+            let ok = day.len() == 10
+                && day.as_bytes()[4] == b'-'
+                && day.as_bytes()[7] == b'-'
+                && day.bytes().enumerate().all(|(i, b)| {
+                    if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() }
+                });
+            if !ok {
+                return Err(format!("day must be YYYY-MM-DD, got {day:?}"));
+            }
+        }
+        if let Some(time) = &self.start_time {
+            let ok = time.len() == 5
+                && time.as_bytes()[2] == b':'
+                && time.bytes().enumerate().all(|(i, b)| {
+                    if i == 2 { b == b':' } else { b.is_ascii_digit() }
+                })
+                && time[0..2].parse::<u8>().is_ok_and(|h| h < 24)
+                && time[3..5].parse::<u8>().is_ok_and(|m| m < 60);
+            if !ok {
+                return Err(format!("start_time must be HH:MM, got {time:?}"));
+            }
+        }
+        if let Some(flow) = &self.flow
+            && flow.chars().count() > MAX_TASK_FLOW
+        {
+            return Err(format!("flow exceeds {MAX_TASK_FLOW} characters"));
+        }
+        if let Some(notes) = &self.notes
+            && notes.chars().count() > MAX_TASK_NOTES
+        {
+            return Err(format!("notes exceed {MAX_TASK_NOTES} characters"));
+        }
+        Ok(())
+    }
+
+    /// The day this task belongs to: the operator's choice when they made one,
+    /// otherwise the creation date.
+    pub fn scheduled_day(&self) -> String {
+        self.day
+            .clone()
+            .unwrap_or_else(|| self.created_at.date_naive().to_string())
+    }
 }
 
 /// Device clock with explicit UTC instant and bounded zone offset.

@@ -35,7 +35,7 @@ hanya di kode.
 | `team_members` | `(team_id, user_sub)` PK | — |
 | `vehicles` | `plate` PK (natural key), `display_name`, `mceasy_vehicle_id`, `mceasy_last_seen`, `mceasy_ignition` | Plate dipakai sebagai identitas kendaraan di kontrak (`vehicleId` = plate) |
 | `hub_vehicles` | `(hub_id, plate)` PK | — |
-| `tasks` | `id` PK, `org_id`, `hub_id`, `title`, `stage` (enum CHECK), `day`, `created_at` | `stage` kini mencakup `unassigned` (V3) |
+| `tasks` | `id` PK, `org_id`, `hub_id`, `title`, `stage` (enum CHECK), `day`, `created_at`, `flow`, `start_time`, `priority` (enum CHECK), `notes` (V5) | `stage` kini mencakup `unassigned` (V3). V5 menambah field dispatch yang sebelumnya dikumpulkan editor tapi tidak pernah disimpan; `day` kini pilihan operator, bukan tanggal pembuatan |
 | `task_assignments` | `(task_id, driver_sub)` PK + `org_id` (V3) | FK komposit V3: `(task_id, org_id)→tasks`, `(org_id, driver_sub)→user_orgs` — assignee **wajib anggota org task** di level DB |
 | `stops` | `id` PK, `task_id`, `sequence` BIGINT, `name`, `address`, `lat`, `lng`, `stage` (enum CHECK), `service_seconds` BIGINT | `UNIQUE(task_id, sequence)` (V3) — kontrak melarang sequence duplikat |
 
@@ -120,6 +120,8 @@ INV-id diturunkan dari `superRefine`/validasi di `packages/api-contracts/src/*.t
 | INV-20 | Duplikat item check `(category,name)` dilarang | **App-level** — `items` adalah JSONB; CHECK tidak bisa melihat ke dalam array. Alternatif normalisasi `check_items` dinilai tidak sebanding (tidak ada query per-item) |
 | INV-21 | Assignee task ∈ anggota org task | `task_assignments_member_fk` komposit `(org_id, driver_sub)→user_orgs` (V3) — **menutup celah: dulu tidak dicek di mana pun** |
 | INV-22 | Task's hub ∈ org task | `task_assignments_task_fk` komposit `(task_id, org_id)→tasks(id, org_id)` + app check `org_hubs` di `create_task`/`update_task` |
+| INV-34 | `tasks.day` = `YYYY-MM-DD`, `start_time` = `HH:MM` atau NULL | `tasks_day_check`, `tasks_start_time_check` (V5) + `Task::validate_schedule` di route create/update |
+| INV-35 | `tasks.priority` ∈ {`normal`,`high`}; `flow` ≤ 64, `notes` ≤ 2000 karakter | `tasks_priority_check`, `tasks_flow_len_check`, `tasks_notes_len_check` (V5) |
 | INV-23 | Event hanya pada task/stop dalam org pemanggil | App-level di `record_event` (JOIN `org_hubs` + `FOR UPDATE`) — FK tidak bisa mengekspresikan "stop ini ∈ task ∈ org ini" tanpa kolom `org_id` pada `stops`; pertimbangkan di V4 bila jalur tulis bertambah |
 | INV-24 | Hub tidak bisa dihapus bila masih dipakai task/report/check/review | `ON DELETE RESTRICT` (V3) + app `hub_in_use` (perlu diperluas — lihat §6) |
 | INV-25 | Hapus org/users/devices menghapus keanggotaan | `ON DELETE CASCADE` pada semua junction |

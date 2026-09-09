@@ -319,17 +319,26 @@ impl PgStore {
             .as_str()
             .unwrap_or("assigned")
             .to_string();
+        let priority = serde_json::to_value(task.priority)?
+            .as_str()
+            .unwrap_or("normal")
+            .to_string();
         tx.execute(
-            "INSERT INTO tasks (id, org_id, hub_id, title, stage, day, created_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            "INSERT INTO tasks (id, org_id, hub_id, title, stage, day, created_at, \
+                                flow, start_time, priority, notes) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
             &[
                 &task.id,
                 &org,
                 &task.hub_id,
                 &task.title,
                 &stage,
-                &task.created_at.date_naive().to_string(),
+                &task.scheduled_day(),
                 &task.created_at,
+                &task.flow,
+                &task.start_time,
+                &priority,
+                &task.notes,
             ],
         )
         .await
@@ -665,11 +674,27 @@ impl PgStore {
             .as_str()
             .unwrap_or("assigned")
             .to_string();
+        let priority = serde_json::to_value(task.priority)?
+            .as_str()
+            .unwrap_or("normal")
+            .to_string();
         let updated = tx
             .execute(
-                "UPDATE tasks SET title = $3, stage = $4, hub_id = $5 \
+                "UPDATE tasks SET title = $3, stage = $4, hub_id = $5, day = $6, \
+                                  flow = $7, start_time = $8, priority = $9, notes = $10 \
                  WHERE id = $2 AND org_id = $1",
-                &[&org, &task.id, &task.title, &stage, &task.hub_id],
+                &[
+                    &org,
+                    &task.id,
+                    &task.title,
+                    &stage,
+                    &task.hub_id,
+                    &task.scheduled_day(),
+                    &task.flow,
+                    &task.start_time,
+                    &priority,
+                    &task.notes,
+                ],
             )
             .await
             .context("update task")?;

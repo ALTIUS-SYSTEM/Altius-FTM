@@ -132,12 +132,15 @@ const toTask = (doc: TaskDoc): DemoTask & { _stopId?: string } => {
     title: String(root.title ?? ""),
     address: String(firstStop?.address ?? firstStop?.name ?? ""),
     hub: String(pick(root, "hub_id", "hub-id", "hub") ?? ""),
-    flow: String(root.flow ?? "Delivery"),
+    flow: String(root.flow ?? "") || "Delivery",
     assignee: String(pick(root, "assignee", "assignee_id", "driver_id") ?? ""),
     status: mapStatus(String(pick(root, "stage", "status") ?? "assigned")),
     date: String(root.day ?? ""),
-    time: String(root.time ?? ""),
-    priority: ["Normal", "High"].includes(String(root.priority)) ? (String(root.priority) as DemoTask["priority"]) : "Normal",
+    // Stored as start_time / lower-case priority. The older `time` and
+    // capitalised forms are still accepted so a row written before these
+    // columns existed does not lose its shape on read.
+    time: String(pick(root, "start_time", "start-time", "time") ?? ""),
+    priority: String(pick(root, "priority") ?? "").toLowerCase() === "high" ? "High" : "Normal",
     notes: String(root.notes ?? ""),
     arrival: root.arrival ? String(root.arrival) : undefined,
     departure: root.departure ? String(root.departure) : undefined,
@@ -178,6 +181,15 @@ const toApiTask = (
       },
     ],
     created_at: new Date().toISOString(),
+    // Dispatch detail. These used to be collected by the editor and dropped on
+    // the floor: the API had no columns for them, so instructions typed for a
+    // driver never left the browser. Empty stays undefined rather than "" so
+    // "not set" and "cleared" do not collapse into the same stored value.
+    day: task.date || undefined,
+    start_time: task.time || undefined,
+    flow: task.flow || undefined,
+    priority: task.priority === "High" ? "high" : "normal",
+    notes: task.notes || undefined,
   };
 };
 

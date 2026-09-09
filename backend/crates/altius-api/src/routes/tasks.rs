@@ -82,6 +82,9 @@ async fn create_task(
     // Never trust body tenant_id for scoping — org comes from the JWT link.
     let mut task = task;
     task.tenant_id = org.clone();
+    // Reject a malformed schedule here rather than letting the CHECK constraint
+    // surface it as an opaque database error the caller cannot act on.
+    task.validate_schedule().map_err(ApiError::BadRequest)?;
     store(&s)?
         .create_task(&org, &task)
         .await
@@ -106,6 +109,7 @@ async fn update_task(
     let org = org_of(&s, &principal.subject).await?;
     // Never trust body tenant_id for scoping — org comes from the JWT link.
     task.tenant_id = org.clone();
+    task.validate_schedule().map_err(ApiError::BadRequest)?;
     store(&s)?.update_task(&org, &task).await.map_err(|e| {
         let msg = e.to_string();
         if msg.contains("not found") {
