@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useDemo } from "@/components/demo-provider";
 import { Badge, Card, Icon, Table } from "@/components/ui";
-import { DEMO_DATE, DRIVERS } from "@/data/model";
+import { today, DRIVERS } from "@/data/model";
 import { csvCell, downloadText } from "@/data/adapter";
 
 interface PlanRow {
@@ -76,7 +76,7 @@ const usePlanRows = (hub: string): PlanRow[] => {
       const notes = task.notes || notesFor(activity.key, task.address);
       rows.push({
         id: `${task.id}-${index}`,
-        date: task.date || DEMO_DATE,
+        date: task.date || today(),
         activity: activity.key,
         customer: task.title,
         fleet,
@@ -186,7 +186,7 @@ export function Schedule() {
           />
         </div>
         <div className="grow" />
-        <button className="primary" onClick={() => downloadText(`altius-schedule-${DEMO_DATE}.csv`, csv())}>
+        <button className="primary" onClick={() => downloadText(`altius-schedule-${today()}.csv`, csv())}>
           <Icon name="download" />
           Ekspor CSV
         </button>

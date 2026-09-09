@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_appauth/flutter_appauth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -99,6 +100,7 @@ class AuthService {
       // hangs postUrl forever and the cubit never leaves state.busy.
       ..connectionTimeout = const Duration(seconds: 10);
     try {
+      debugPrint('[login] POST $issuer/protocol/openid-connect/token client=$clientId');
       final req = await client.postUrl(
         Uri.parse('$issuer/protocol/openid-connect/token'),
       );

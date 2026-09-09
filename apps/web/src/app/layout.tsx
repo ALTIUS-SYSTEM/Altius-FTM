@@ -8,7 +8,7 @@ import "@fontsource/public-sans/700.css";
 import "./globals.css";
 import { DemoProvider } from "@/components/demo-provider";
 
-export const metadata: Metadata = { title: "Altius · Field Operations Demo", description: "Altius FTM operations workspace — synthetic demo data only." };
+export const metadata: Metadata = { title: "Altius · Field Operations", description: "Altius FTM operations workspace — tasks, routes, driver reports and GPS review." };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   // Browser extensions inject attributes into <body> before React hydrates

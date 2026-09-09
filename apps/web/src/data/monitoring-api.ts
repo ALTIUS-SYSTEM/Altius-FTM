@@ -1,28 +1,6 @@
 "use client";
 
-import { apiBase } from "./api-adapter";
-import { accessToken, authConfig } from "@/lib/auth";
-
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const base = apiBase();
-  const cfg = authConfig();
-  if (!base || !cfg) throw new Error("The Altius API and Keycloak must be configured.");
-  const token = await accessToken(cfg);
-  if (!token) throw new Error("Your session expired. Sign in again.");
-  const res = await fetch(`${base}${path}`, {
-    ...init,
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = (await res.json().catch(() => ({}))) as { data?: T; error?: { message?: string } };
-  if (!res.ok) throw new Error(body.error?.message ?? `Request failed (${res.status}).`);
-  return body.data as T;
-}
-
-const asString = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
-const asNumber = (v: unknown): number => {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
-};
+import { call, asString, asNumber } from "./api-client";
 
 export interface GpsReview {
   id: string;

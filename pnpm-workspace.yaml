@@ -10,6 +10,12 @@ minimumReleaseAge: 10080
 # the lockfile would have dropped it silently.
 overrides:
   postcss: 8.5.26
+  # GHSA-866g-f22w-33x8 (uncontrolled resource consumption). Reached only as a
+  # transitive of the developer portal's Scalar reference, which pins 4.0.5.
+  # Held on the 4.x line rather than forced to 5.x so @ai-sdk/vue keeps the
+  # major it expects; 4.0.50 is the newest release past the 7-day
+  # minimumReleaseAge gate.
+  "@ai-sdk/provider-utils": 4.0.50
 # Supply-chain hardening (pnpm ≥ 10.21 / 10.26).
 trustPolicy: no-downgrade
 blockExoticSubdeps: true

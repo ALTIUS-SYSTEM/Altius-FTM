@@ -1,36 +1,9 @@
 "use client";
 
-import { apiBase } from "./api-adapter";
-import { accessToken, authConfig } from "@/lib/auth";
+import { call, asString, asNumber } from "./api-client";
 
 export interface Hub { id: string; name: string; lat: number; lng: number }
 export interface Team { id: string; name: string; shift: string; hubId: string; members: string[] }
-
-/**
- * Authenticated call to the admin surface. Organization scope is resolved
- * server-side from the token — nothing here sends a tenant id, because a
- * client-supplied one would be a tenant selector the caller controls.
- */
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const base = apiBase();
-  const cfg = authConfig();
-  if (!base || !cfg) throw new Error("The Altius API and Keycloak must be configured.");
-  const token = await accessToken(cfg);
-  if (!token) throw new Error("Your session expired. Sign in again.");
-  const res = await fetch(`${base}${path}`, {
-    ...init,
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = (await res.json().catch(() => ({}))) as { data?: T; error?: { message?: string } };
-  if (!res.ok) throw new Error(body.error?.message ?? `Request failed (${res.status}).`);
-  return body.data as T;
-}
-
-const asString = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
-const asNumber = (v: unknown): number => {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
-};
 
 export const listHubs = async (): Promise<Hub[]> => {
   const rows = await call<Record<string, unknown>[]>("/api/v3/hubs");
@@ -109,6 +82,22 @@ export const listUsers = async (): Promise<User[]> => {
       roles,
     };
   });
+};
+
+/**
+ * Drivers a task can actually be assigned to.
+ *
+ * The API resolves the assignee against org membership and rejects anything
+ * else with "assign task", so a hard-coded roster produces a 400 on save. Falls
+ * back to `display-name` because that is what the task rows carry as assignee.
+ */
+export const listDrivers = async (): Promise<string[]> => {
+  const users = await listUsers();
+  return users
+    .filter(u => u.roles.some(r => r.toLowerCase() === "driver"))
+    .map(u => u.name)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
 };
 
 export const ROLES = ["super-admin", "admin", "supervisor", "lead", "driver"] as const;
