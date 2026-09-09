@@ -28,6 +28,9 @@ attribute category      value string;
 attribute amount-minor  value integer;
 attribute currency      value string @regex("^[A-Z]{3}$");
 attribute note          value string;
+attribute flow          value string;
+attribute start-time    value string;
+attribute priority      value string;
 attribute report-status value string;
 attribute revision      value integer;
 attribute plate         value string;
@@ -83,7 +86,11 @@ entity task
     owns task-id @key,
     owns title,
     owns stage,
-    owns day;
+    owns day,
+    owns flow,
+    owns start-time,
+    owns priority,
+    owns note;
 
 entity stop
     owns stop-id @key,

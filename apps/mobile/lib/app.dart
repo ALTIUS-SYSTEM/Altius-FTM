@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:share_plus/share_plus.dart';
 import 'core/data/work_store.dart';
 import 'core/l10n/strings.dart';
@@ -255,12 +257,39 @@ class TasksTab extends StatelessWidget {
   }
 }
 
-class TaskCard extends StatelessWidget {
+class TaskCard extends StatefulWidget {
   const TaskCard({super.key, required this.task, required this.s});
   final FieldTask task;
   final Strings s;
   @override
+  State<TaskCard> createState() => _TaskCardState();
+}
+
+class _TaskCardState extends State<TaskCard> {
+  late Future<int> _eta;
+
+  @override
+  void initState() {
+    super.initState();
+    _eta = _computeEta();
+  }
+
+  /// When the backend supplies a non-zero `eta_minutes`, use it. Otherwise
+  /// compute a straight-line fallback from the driver's last known GPS fix
+  /// to the task's coordinates (30 km/h, matching the backend's schematic
+  /// fallback). Returns 0 when neither is available.
+  Future<int> _computeEta() async {
+    if (widget.task.etaMinutes > 0 || !widget.task.isLocated) return widget.task.etaMinutes;
+    final store = context.read<WorkCubit>().store;
+    final gps = await store.lastLocation();
+    if (gps == null) return widget.task.etaMinutes;
+    return WorkStore.schematicEtaMinutes(gps, (lat: widget.task.lat!, lng: widget.task.lng!));
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final task = widget.task;
+    final s = widget.s;
     final stageKeys = ['assigned', 'arrived', 'working', 'done'];
     final done = task.stage == TaskStage.done;
     return Card(child: InkWell(
@@ -274,7 +303,15 @@ class TaskCard extends StatelessWidget {
         const SizedBox(height: 4),
         Text(task.address, style: Theme.of(context).textTheme.bodySmall),
         const SizedBox(height: 8),
-        Row(children: [const Icon(Icons.schedule_rounded, size: 14, color: AppTheme.teal), const SizedBox(width: 4), Text('${s('eta')} · ${task.etaMinutes} ${s('min')}', style: const TextStyle(fontSize: 12, color: AppTheme.teal, fontWeight: FontWeight.w600))]),
+        FutureBuilder<int>(
+          future: _eta,
+          builder: (context, snap) => Row(children: [
+            const Icon(Icons.schedule_rounded, size: 14, color: AppTheme.teal),
+            const SizedBox(width: 4),
+            Text('${s('eta')} · ${snap.data ?? task.etaMinutes} ${s('min')}',
+              style: const TextStyle(fontSize: 12, color: AppTheme.teal, fontWeight: FontWeight.w600)),
+          ]),
+        ),
       ])),
     ));
   }
@@ -358,6 +395,91 @@ class _RouteTabState extends State<RouteTab> {
   String? _error;
   bool _busy = false;
   String _plannedFor = '';
+  Timer? _refreshTimer;
+  StreamSubscription<Position>? _geofenceSub;
+  bool _geofenceChecking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // ETA clock times are derived from `now` at build time. Without a
+    // periodic rebuild they'd freeze until the next state change (event,
+    // task pull). 30s keeps the predicted arrival within half a minute of
+    // reality without a rebuild storm.
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+    // Geofence: listen for position changes while the Route tab is visible.
+    // When the driver comes within 50m of a pending stop, auto-record
+    // arrival. Foreground-only — no background tracking.
+    _startGeofence();
+  }
+
+  void _startGeofence() {
+    _geofenceSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 30, // meters — coarser than the geofence to save battery
+      ),
+    ).listen((_) => _checkGeofence());
+  }
+
+  Future<void> _checkGeofence() async {
+    if (_geofenceChecking || !mounted) return;
+    _geofenceChecking = true;
+    try {
+      final store = context.read<WorkCubit>().store;
+      final arrived = await store.checkGeofence();
+      if (arrived != null && mounted) {
+        // Refresh the cubit so the UI reflects the auto-arrival immediately.
+        await context.read<WorkCubit>().refresh();
+      }
+    } finally {
+      _geofenceChecking = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    _geofenceSub?.cancel();
+    super.dispose();
+  }
+
+  /// Formats a [DateTime] as `HH:mm` in local time.
+  String _clock(DateTime dt) {
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  /// Predicted arrival clock time at stop [index], computed from the planned
+  /// route's per-leg drive times. Returns null when no route or the leg data
+  /// doesn't cover this stop.
+  ///
+  /// With a GPS origin, `ordered[0]` is the first stop (not the origin), so
+  /// `legMinutes[0]` is the drive time *to* it. The cumulative is therefore
+  /// `sum(legMinutes[0..index])` — `sublist(0, index + 1)`.
+  String? _etaClock(PlannedRoute? route, int index, DateTime now) {
+    if (route == null || index >= route.legMinutes.length) return null;
+    final cumulative = route.legMinutes.sublist(0, index + 1).fold<int>(0, (a, b) => a + b);
+    return _clock(now.add(Duration(minutes: cumulative)));
+  }
+
+  /// Actual arrival time recorded on-device for [taskId], derived from the
+  /// `arrived` event's UTC timestamp adjusted by the stored timezone offset.
+  /// Returns null when the driver hasn't reported arrival yet.
+  String? _ataClock(List<WorkEvent> events, String taskId) {
+    final arrived = events
+        .where((e) => e.entity == taskId && e.kind == 'arrived')
+        .toList();
+    if (arrived.isEmpty) return null;
+    // Earliest arrival event wins — a replayed duplicate would otherwise
+    // show a later timestamp than when the driver actually got there.
+    arrived.sort((a, b) => a.utc.compareTo(b.utc));
+    final e = arrived.first;
+    return _clock(e.utc.add(Duration(minutes: e.offsetMinutes)));
+  }
 
   /// Re-plan when the set of remaining located stops changes, not on every
   /// rebuild — each plan is two billed Google calls.
@@ -372,14 +494,17 @@ class _RouteTabState extends State<RouteTab> {
 
     setState(() { _busy = true; _error = null; });
     final points = [for (final t in located) (lat: t.lat!, lng: t.lng!)];
+    // Live GPS as the route origin — ETA measures from where the driver
+    // actually is, not from the first stop. Falls back to the first stop
+    // when GPS is unavailable (permission denied, timeout, etc.).
+    final gps = await store.currentLocation();
+    final origin = gps ?? points.first;
     try {
-      final route = await _service.optimize(baseUrl: base, token: token, waypoints: points);
-      final ordered = <({double lat, double lng})>[
-        points.first,
-        for (final i in route.order) if (i + 1 < points.length) points[i + 1],
-      ];
+      final route = await _service.optimize(
+        baseUrl: base, token: token, waypoints: points, origin: origin);
+      final orderedPoints = [for (final i in route.order) if (i < points.length) points[i]];
       final image = await _service.mapImage(
-        baseUrl: base, token: token, markers: ordered, polyline: route.polyline);
+        baseUrl: base, token: token, markers: orderedPoints, polyline: route.polyline);
       if (!mounted) return;
       setState(() { _route = route; _map = image; _plannedFor = key; });
     } on Object {
@@ -401,10 +526,7 @@ class _RouteTabState extends State<RouteTab> {
       final route = _route;
       final ordered = route == null
           ? remaining
-          : <FieldTask>[
-              located.first,
-              for (final i in route.order) if (i + 1 < located.length) located[i + 1],
-            ];
+          : <FieldTask>[for (final i in route.order) if (i < located.length) located[i]];
 
       return ListView(padding: const EdgeInsets.all(16), children: [
         Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -428,12 +550,20 @@ class _RouteTabState extends State<RouteTab> {
           Text(s('next'), style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           if (ordered.isEmpty) Text(s('empty'))
-          else ...ordered.asMap().entries.map((e) => ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: CircleAvatar(radius: 14, backgroundColor: AppTheme.cyan, child: Text('${e.key + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.teal))),
-            title: Text(e.value.title),
-            subtitle: Text('${s('eta')}: ${route != null && e.key < route.legMinutes.length ? route.legMinutes[e.key] : e.value.etaMinutes} ${s('min')} · ${s('ata')}: —'),
-          )),
+          else ...ordered.asMap().entries.map((e) {
+            final task = e.value;
+            final arrived = task.stage != TaskStage.assigned;
+            final eta = arrived ? null : _etaClock(route, e.key, DateTime.now());
+            final ata = arrived ? _ataClock(state.events, task.id) : null;
+            final etaText = eta ?? '${task.etaMinutes} ${s('min')}';
+            final ataText = ata ?? '—';
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: CircleAvatar(radius: 14, backgroundColor: AppTheme.cyan, child: Text('${e.key + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.teal))),
+              title: Text(task.title),
+              subtitle: Text('${s('eta')}: $etaText · ${s('ata')}: $ataText'),
+            );
+          }),
         ]))),
         Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(s('safety'), style: Theme.of(context).textTheme.titleMedium),

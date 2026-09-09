@@ -208,6 +208,23 @@ impl TypedbStore {
             .as_str()
             .unwrap_or("assigned")
             .to_string();
+        let priority = serde_json::to_value(task.priority)?
+            .as_str()
+            .unwrap_or("normal")
+            .to_string();
+        // Optional attributes are appended rather than written as empty
+        // strings: TypeDB has no null, so `has flow ""` would make "not set"
+        // and "set to blank" indistinguishable to every later read.
+        let mut optional = String::new();
+        for (attr, value) in [
+            ("flow", task.flow.as_deref()),
+            ("start-time", task.start_time.as_deref()),
+            ("note", task.notes.as_deref()),
+        ] {
+            if let Some(v) = value.filter(|v| !v.is_empty()) {
+                optional.push_str(&format!(",\n                    has {attr} \"{}\"", Self::esc(v)));
+            }
+        }
         let mut q = format!(
             r#"match
                 $o isa organization, has org-id "{org}";
@@ -218,14 +235,17 @@ impl TypedbStore {
                     has task-id "{tid}",
                     has title "{title}",
                     has stage "{stage}",
-                    has day "{day}";
+                    has priority "{priority}",
+                    has day "{day}"{optional};
                 located (task: $t, hub: $h);"#,
             org = Self::esc(org),
             hub = Self::esc(&task.hub_id),
             tid = Self::esc(&task.id),
             title = Self::esc(&task.title),
             stage = Self::esc(&stage),
-            day = Self::esc(&task.created_at.date_naive().to_string()),
+            priority = Self::esc(&priority),
+            day = Self::esc(&task.scheduled_day()),
+            optional = optional,
         );
 
         for stop in &task.stops {

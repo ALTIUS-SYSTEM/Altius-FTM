@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::{AuthUser, is_staff, org_of, require_staff, store};
 use crate::AppState;
 use crate::error::{ApiError, ApiResult};
-use crate::maps::{MAX_OPTIMIZE_WAYPOINTS, MapsClient};
+use crate::maps::{MAX_OPTIMIZE_WAYPOINTS, MapsClient, schematic_eta_seconds};
 use altius_core::{Coordinate, DeviceEvent, Role, StopAction, Task};
 
 #[derive(serde::Deserialize)]
@@ -34,14 +34,17 @@ async fn list_tasks(State(s): State<Arc<AppState>>, principal: AuthUser) -> ApiR
     // A driver pulls only their assignments — the mobile board has no claim
     // flow, so an org-wide list just leaks colleagues' work. Staff and
     // integration service accounts read the full board.
+    let st = store(&s)?;
     let tasks = if is_staff(&principal) || principal.has_role(Role::Integration) {
-        store(&s)?.tasks_for_org(&org).await
+        st.tasks_for_org(&org).await
     } else {
-        store(&s)?.tasks_for_driver(&org, &principal.subject).await
+        st.tasks_for_driver(&org, &principal.subject).await
     }
     .map_err(ApiError::Internal)?;
+    let hubs = st.hubs_for_org(&org).await.map_err(ApiError::Internal)?;
+    let enriched = enrich_with_eta(tasks, &hubs);
     Ok(Json(json!({
-        "data": tasks,
+        "data": enriched,
         "meta": { "mode": "live", "organization": org }
     })))
 }
@@ -52,7 +55,8 @@ async fn get_task(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let org = org_of(&s, &principal.subject).await?;
-    let task = store(&s)?
+    let st = store(&s)?;
+    let task = st
         .task_by_id(&org, &id)
         .await
         .map_err(ApiError::Internal)?;
@@ -66,8 +70,77 @@ async fn get_task(
             return Err(ApiError::NotFound);
         }
     }
-    task.map(|t| Json(json!({ "data": t })))
+    let hubs = st.hubs_for_org(&org).await.map_err(ApiError::Internal)?;
+    task.map(|t| Json(json!({ "data": enrich_with_eta(vec![t], &hubs).into_iter().next().unwrap() })))
         .ok_or(ApiError::NotFound)
+}
+
+/// Inject `eta_minutes` into each task envelope, computed as a straight-line
+/// ETA (30 km/h) from the task's hub to its first non-completed stop. Matches
+/// the mobile's `schematicEtaMinutes` fallback so both sides agree when no
+/// Google route has been planned. Zero when coordinates are missing.
+fn enrich_with_eta(tasks: Vec<Value>, hubs: &[Value]) -> Vec<Value> {
+    // Index hub coordinates by hub_id for O(1) lookup. Postgres gives `id`,
+    // TypeDB gives `hub-id` — handle both.
+    let hub_coords: std::collections::HashMap<&str, Coordinate> = hubs
+        .iter()
+        .filter_map(|h| {
+            let hub = h.pointer("/hub")?;
+            let id = hub
+                .get("id")
+                .or_else(|| hub.get("hub-id"))
+                .or_else(|| hub.get("hub_id"))?
+                .as_str()?;
+            let lat = hub.get("lat")?.as_f64()?;
+            let lng = hub.get("lng")?.as_f64()?;
+            Some((id, Coordinate { lat, lng }))
+        })
+        .collect();
+
+    tasks
+        .into_iter()
+        .map(|mut task| {
+            let hub_id = task
+                .pointer("/task/hub_id")
+                .or_else(|| task.pointer("/task/hub-id"))
+                .and_then(|v| v.as_str());
+            let stops = task
+                .get("stops")
+                .and_then(|s| s.as_array())
+                .cloned()
+                .unwrap_or_default();
+            // First stop that hasn't been completed/departed/skipped — the
+            // next place the driver needs to be.
+            let next_stop = stops.iter().find(|s| {
+                let stage = s
+                    .get("stage")
+                    .or_else(|| s.get("status"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("pending");
+                !matches!(stage, "completed" | "departed" | "skipped")
+            });
+            let eta_minutes = match (hub_id, next_stop) {
+                (Some(hid), Some(stop)) => {
+                    let origin = hub_coords.get(hid);
+                    let stop_lat = stop.get("lat").or_else(|| stop.get("latitude")).and_then(|v| v.as_f64());
+                    let stop_lng = stop.get("lng").or_else(|| stop.get("longitude")).and_then(|v| v.as_f64());
+                    match (origin, stop_lat, stop_lng) {
+                        (Some(o), Some(lat), Some(lng)) => {
+                            schematic_eta_seconds(*o, Coordinate { lat, lng }) / 60
+                        }
+                        _ => 0,
+                    }
+                }
+                _ => 0,
+            };
+            // Inject into the task sub-object so the mobile parser's
+            // `root['eta_minutes']` lookup finds it.
+            if let Some(task_obj) = task.get_mut("task").and_then(|t| t.as_object_mut()) {
+                task_obj.insert("eta_minutes".into(), json!(eta_minutes));
+            }
+            task
+        })
+        .collect()
 }
 
 async fn create_task(
@@ -82,6 +155,9 @@ async fn create_task(
     // Never trust body tenant_id for scoping — org comes from the JWT link.
     let mut task = task;
     task.tenant_id = org.clone();
+    // Reject a malformed schedule here rather than letting the CHECK constraint
+    // surface it as an opaque database error the caller cannot act on.
+    task.validate_schedule().map_err(ApiError::BadRequest)?;
     store(&s)?
         .create_task(&org, &task)
         .await
@@ -106,6 +182,7 @@ async fn update_task(
     let org = org_of(&s, &principal.subject).await?;
     // Never trust body tenant_id for scoping — org comes from the JWT link.
     task.tenant_id = org.clone();
+    task.validate_schedule().map_err(ApiError::BadRequest)?;
     store(&s)?.update_task(&org, &task).await.map_err(|e| {
         let msg = e.to_string();
         if msg.contains("not found") {

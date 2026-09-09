@@ -159,6 +159,11 @@ fn task(id: &str, org: &str, hub: &str) -> Task {
             },
         ],
         created_at: Utc::now(),
+        day: None,
+        start_time: None,
+        flow: None,
+        priority: altius_core::TaskPriority::Normal,
+        notes: None,
     }
 }
 
@@ -918,5 +923,86 @@ async fn provision_service_account_org_resolution() {
             .await
             .expect("org after deprovision"),
         None
+    );
+}
+
+/// The five dispatch fields the editor collects must survive a write and come
+/// back on the next read. They were silently dropped before V5 — the columns
+/// did not exist, so a driver's instructions never left the browser.
+#[tokio::test]
+async fn task_schedule_fields_survive_a_round_trip() {
+    let Some(fx) = Fixture::new().await else {
+        return;
+    };
+    let org = uniq("org");
+    let hub = uniq("hub");
+    fx.seed_org(&org, &hub).await;
+
+    let id = uniq("task");
+    let mut t = task(&id, &org, &hub);
+    t.day = Some("2026-12-24".into());
+    t.start_time = Some("07:45".into());
+    t.flow = Some("House inspection".into());
+    t.priority = altius_core::TaskPriority::High;
+    t.notes = Some("Ring the bell twice; gate code 4417.".into());
+    fx.store().create_task(&org, &t).await.expect("create task");
+
+    let read = |rows: Vec<serde_json::Value>| -> serde_json::Value {
+        rows.into_iter()
+            .find(|r| r["task"]["id"] == serde_json::json!(id))
+            .expect("task missing from org listing")["task"]
+            .clone()
+    };
+    let row = read(fx.store().tasks_for_org(&org).await.expect("list tasks"));
+    assert_eq!(row["day"], serde_json::json!("2026-12-24"));
+    assert_eq!(row["start_time"], serde_json::json!("07:45"));
+    assert_eq!(row["flow"], serde_json::json!("House inspection"));
+    assert_eq!(row["priority"], serde_json::json!("high"));
+    assert_eq!(
+        row["notes"],
+        serde_json::json!("Ring the bell twice; gate code 4417.")
+    );
+
+    // An edit must move them too, including clearing one back to nothing.
+    t.day = Some("2026-12-25".into());
+    t.priority = altius_core::TaskPriority::Normal;
+    t.notes = None;
+    fx.store().update_task(&org, &t).await.expect("update task");
+    let row = read(fx.store().tasks_for_org(&org).await.expect("list tasks"));
+    assert_eq!(row["day"], serde_json::json!("2026-12-25"));
+    assert_eq!(row["priority"], serde_json::json!("normal"));
+    assert_eq!(row["notes"], serde_json::json!(null));
+}
+
+/// Absent schedule fields must not become empty strings: "not set" and "set to
+/// blank" have to stay distinguishable for every later reader.
+#[tokio::test]
+async fn task_without_schedule_fields_stores_nulls_and_the_created_day() {
+    let Some(fx) = Fixture::new().await else {
+        return;
+    };
+    let org = uniq("org");
+    let hub = uniq("hub");
+    fx.seed_org(&org, &hub).await;
+
+    let id = uniq("task");
+    let t = task(&id, &org, &hub);
+    fx.store().create_task(&org, &t).await.expect("create task");
+
+    let rows = fx.store().tasks_for_org(&org).await.expect("list tasks");
+    let row = rows
+        .into_iter()
+        .find(|r| r["task"]["id"] == serde_json::json!(id))
+        .expect("task missing")["task"]
+        .clone();
+    assert_eq!(row["flow"], serde_json::json!(null));
+    assert_eq!(row["start_time"], serde_json::json!(null));
+    assert_eq!(row["notes"], serde_json::json!(null));
+    assert_eq!(row["priority"], serde_json::json!("normal"));
+    // No day supplied falls back to the creation date rather than NULL, which
+    // the column forbids and every dispatch board relies on.
+    assert_eq!(
+        row["day"],
+        serde_json::json!(t.created_at.date_naive().to_string())
     );
 }

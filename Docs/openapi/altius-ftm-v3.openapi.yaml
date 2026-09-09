@@ -956,6 +956,30 @@ components:
           items:
             $ref: '#/components/schemas/Stop'
         created_at: { type: string, format: date-time }
+        day:
+          type: string
+          nullable: true
+          pattern: '^\\d{4}-\\d{2}-\\d{2}$'
+          description: Scheduled day. Absent falls back to the creation date.
+        start_time:
+          type: string
+          nullable: true
+          pattern: '^([01]\\d|2[0-3]):[0-5]\\d$'
+          description: Planned start on `day`, 24-hour.
+        flow:
+          type: string
+          nullable: true
+          maxLength: 64
+          description: Dispatch workflow label (Delivery, Pickup, …). Not constrained by the API.
+        priority:
+          type: string
+          enum: [normal, high]
+          default: normal
+        notes:
+          type: string
+          nullable: true
+          maxLength: 2000
+          description: Instructions for the driver.
 
     TaskDocument:
       description: Store/list projection may nest task and stops

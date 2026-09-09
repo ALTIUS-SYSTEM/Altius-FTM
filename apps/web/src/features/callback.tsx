@@ -6,26 +6,36 @@ import { useDemo } from "@/components/demo-provider";
 import { authConfig, clearLoginState, decodeJwt, finishLogin, silentAuth, type JwtClaims } from "@/lib/auth";
 import type { DemoState } from "@/data/model";
 
-const ROLE_MAP: Record<string, DemoState["role"]> = {
+/**
+ * Realm role → the label the shell shows, most privileged first.
+ *
+ * One list, not two. There used to be a separate KNOWN_ROLES array that
+ * included `super-admin` while this map did not, so a super-admin matched and
+ * then resolved to `undefined` — `Record<string, T>` indexing hands back `T`,
+ * not `T | undefined`, so nothing complained until an undefined role reached
+ * the state schema and every save failed validation. Deriving the search order
+ * from the map's own keys makes that disagreement impossible.
+ *
+ * The shell has no Driver persona: driver maps to Lead so a driver account can
+ * still open it. Authorization is the API's business either way — this label
+ * grants nothing.
+ */
+const ROLE_MAP = {
+  "super-admin": "Admin",
   admin: "Admin",
   supervisor: "Supervisor",
   lead: "Lead",
-  // DemoState personas are staff-only (no Driver). Map driver→Lead so the
-  // documented driver/changeme Keycloak login still enters the demo shell;
-  // API authz remains realm-role based, not this UI label.
   driver: "Lead",
-};
+} as const satisfies Record<string, DemoState["role"]>;
 
-const KNOWN_ROLES = ["super-admin", "admin", "supervisor", "lead", "driver"] as const;
-
-function extractRole(claims: JwtClaims): DemoState["role"] {
+export function extractRole(claims: JwtClaims): DemoState["role"] {
   const lowerRoles = new Set<string>();
   for (const r of claims.realm_access?.roles ?? []) lowerRoles.add(r.toLowerCase());
   for (const client of Object.values(claims.resource_access ?? {})) {
     for (const r of client.roles ?? []) lowerRoles.add(r.toLowerCase());
   }
-  const matchedRole = KNOWN_ROLES.find((r) => lowerRoles.has(r));
-  return matchedRole ? ROLE_MAP[matchedRole] : "Lead";
+  const matched = (Object.keys(ROLE_MAP) as (keyof typeof ROLE_MAP)[]).find(r => lowerRoles.has(r));
+  return matched ? ROLE_MAP[matched] : "Lead";
 }
 
 export function Callback() {

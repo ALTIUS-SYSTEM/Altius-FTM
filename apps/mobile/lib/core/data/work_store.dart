@@ -601,6 +601,19 @@ class WorkStore {
     lat: r.read<double?>('lat'), lng: r.read<double?>('lng'),
     stopId: r.read<String?>('stop_id'),
   )).toList();
+
+  /// Straight-line ETA in minutes from [from] to [to], assuming 30 km/h.
+  /// Matches the backend's `schematic_eta_seconds` fallback used when no
+  /// Google Maps key is configured.
+  static int schematicEtaMinutes(({double lat, double lng}) from, ({double lat, double lng}) to) {
+    const r = 6371000.0;
+    final dLat = (to.lat - from.lat) * pi / 180;
+    final dLng = (to.lng - from.lng) * pi / 180;
+    final h = pow(sin(dLat / 2), 2) +
+        cos(from.lat * pi / 180) * cos(to.lat * pi / 180) * pow(sin(dLng / 2), 2);
+    final meters = 2 * r * asin(sqrt(h));
+    return (meters / (30000.0 / 3600.0) / 60).round();
+  }
   Future<List<WorkEvent>> events() async => (await _db.customSelect('SELECT * FROM events ORDER BY rowid').get()).map(WorkEvent.new).toList();
   Future<List<CostEntry>> costs() async => (await _db.customSelect('SELECT * FROM costs ORDER BY rowid').get()).map(CostEntry.new).toList();
   Future<List<DailyReport>> reports() async => (await _db.customSelect('SELECT * FROM reports ORDER BY day DESC').get()).map(DailyReport.new).toList();
@@ -664,6 +677,10 @@ class WorkStore {
     try {
       final pos = await Geolocator.getCurrentPosition()
           .timeout(const Duration(seconds: 5));
+      // Persist for ETA fallbacks that don't want to re-acquire (and burn
+      // battery) on every task-list rebuild.
+      await _pref('lastGpsLat', pos.latitude.toString());
+      await _pref('lastGpsLng', pos.longitude.toString());
       return {
         'lat': pos.latitude,
         'lng': pos.longitude,
@@ -672,6 +689,28 @@ class WorkStore {
     } on Object {
       return {};
     }
+  }
+
+  /// One-shot GPS read for route planning. Returns null when permission is
+  /// denied or the fix times out — the caller falls back to the first stop.
+  Future<({double lat, double lng})?> currentLocation() async {
+    try {
+      final pos = await Geolocator.getCurrentPosition()
+          .timeout(const Duration(seconds: 5));
+      await _pref('lastGpsLat', pos.latitude.toString());
+      await _pref('lastGpsLng', pos.longitude.toString());
+      return (lat: pos.latitude, lng: pos.longitude);
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Last persisted GPS fix, or null when no event has captured one yet.
+  Future<({double lat, double lng})?> lastLocation() async {
+    final lat = double.tryParse(await preference('lastGpsLat'));
+    final lng = double.tryParse(await preference('lastGpsLng'));
+    if (lat == null || lng == null) return null;
+    return (lat: lat, lng: lng);
   }
 
   Future<void> _event(String entity, String kind, {Map<String, Object?> payload = const {}, String? requestId, Map<String, Object?> input = const {}}) async {
@@ -716,6 +755,48 @@ class WorkStore {
     await _db.customStatement('UPDATE tasks SET stage = ? WHERE id = ?', [next.index, id]);
     await _event(id, next.name, requestId: requestId, input: input, payload: {'proofDraft': await draft('proof:$id')});
   });
+
+  /// Geofence radius in meters. Matches the GPS accuracy threshold used for
+  /// event validation — within this distance a pending stop is "arrived".
+  static const geofenceRadiusMeters = 50.0;
+
+  /// Check the driver's current GPS position against all pending located
+  /// stops. Auto-advances the first matching stop to `arrived` and returns
+  /// its task id so the caller can show a confirmation. Returns null when no
+  /// stop is within the geofence or the trip isn't active.
+  ///
+  /// This is a foreground-only check — it does not run in the background.
+  /// The driver still taps "Report arrival" manually when GPS is unavailable
+  /// or the geofence is too tight for the environment (e.g. multi-storey).
+  Future<String?> checkGeofence() async {
+    if (!await tripActive()) return null;
+    final pos = await currentLocation();
+    if (pos == null) return null;
+    final pending = (await tasks()).where((t) =>
+        t.stage == TaskStage.assigned && t.isLocated).toList();
+    for (final task in pending) {
+      final distance = _haversineMeters(pos, (lat: task.lat!, lng: task.lng!));
+      if (distance <= geofenceRadiusMeters) {
+        try {
+          await advance(task.id, TaskStage.arrived);
+          return task.id;
+        } on Object {
+          // Sequence conflict (another task already arrived) — skip silently.
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  double _haversineMeters(({double lat, double lng}) a, ({double lat, double lng}) b) {
+    const r = 6371000.0;
+    final dLat = (b.lat - a.lat) * pi / 180;
+    final dLng = (b.lng - a.lng) * pi / 180;
+    final h = pow(sin(dLat / 2), 2) +
+        cos(a.lat * pi / 180) * cos(b.lat * pi / 180) * pow(sin(dLng / 2), 2);
+    return 2 * r * asin(sqrt(h));
+  }
 
   Future<void> createTask(String title, String address, {required String requestId}) => _write(() async {
     final input = <String, Object?>{'title': title.trim(), 'address': address.trim()};

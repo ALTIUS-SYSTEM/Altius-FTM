@@ -6,7 +6,9 @@ import 'dart:typed_data';
 class PlannedRoute {
   const PlannedRoute({required this.order, required this.legMinutes, required this.totalKm, required this.live, this.polyline});
 
-  /// Indices into the waypoints passed to [RouteService.optimize], in visit order.
+  /// Indices into the stops passed to [RouteService.optimize], in visit order.
+  /// When a separate [origin] was supplied, these index the full `waypoints`
+  /// list; otherwise they index `waypoints.skip(1)` (the legacy contract).
   final List<int> order;
   final List<int> legMinutes;
   final double totalKm;
@@ -44,11 +46,18 @@ class RouteService {
     required String baseUrl,
     required String token,
     required List<({double lat, double lng})> waypoints,
+    ({double lat, double lng})? origin,
   }) async {
-    if (waypoints.length < 2) throw ArgumentError('needs at least two located stops');
-    final origin = waypoints.first;
-    final rest = waypoints.skip(1).map((w) => {'lat': w.lat, 'lng': w.lng}).toList();
-    final body = {'origin': {'lat': origin.lat, 'lng': origin.lng}, 'waypoints': rest};
+    // With a separate origin (driver's live GPS), all waypoints are stops.
+    // Without one, the first waypoint is the origin and the rest are stops —
+    // the legacy contract that keeps the call valid for callers that don't
+    // have a GPS fix.
+    final actualOrigin = origin ?? waypoints.first;
+    final stops = (origin == null ? waypoints.skip(1) : waypoints)
+        .map((w) => {'lat': w.lat, 'lng': w.lng})
+        .toList();
+    if (stops.isEmpty) throw ArgumentError('needs at least one stop beyond the origin');
+    final body = {'origin': {'lat': actualOrigin.lat, 'lng': actualOrigin.lng}, 'waypoints': stops};
     final data = (await _post(baseUrl, token, '/api/v3/route/optimize', body))['data'] as Map<String, dynamic>;
 
     final order = ((data['order'] as List?) ?? const []).map((e) => (e as num).toInt()).toList();

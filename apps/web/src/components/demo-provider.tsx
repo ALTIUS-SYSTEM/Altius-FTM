@@ -8,6 +8,7 @@ import { apiBase, createApiAdapter } from "@/data/api-adapter";
 import type { DemoAdapter } from "@/data/adapter";
 import { accessToken, authConfig } from "@/lib/auth";
 import { translate } from "@/lib/i18n";
+import { ZodError } from "zod";
 
 /**
  * The dashboard only runs in live API mode. Missing configuration is reported,
@@ -23,6 +24,23 @@ const pickAdapter = (): { adapter: DemoAdapter | null; configError: string } => 
     return { adapter: null, configError: "NEXT_PUBLIC_KEYCLOAK_URL, _REALM and _CLIENT_ID must all be set in apps/web/.env.local." };
   return { adapter: createApiAdapter(base, () => accessToken(cfg)), configError: "" };
 };
+
+/**
+ * A save failure the reader can act on.
+ *
+ * Zod throws with a JSON array of issues, and `err.message` is that array
+ * serialized — so an unmapped field surfaced on screen as a wall of
+ * `{"expected":"'Admin' | 'Supervisor'...","code":"invalid_type"}`. Name the
+ * fields instead; the detail still goes to the console for whoever is debugging.
+ */
+function describeSaveFailure(err: unknown): string {
+  if (err instanceof ZodError) {
+    console.error("workspace state failed validation", err.issues);
+    const fields = [...new Set(err.issues.map(i => i.path.join(".") || "workspace"))];
+    return `This change could not be saved: ${fields.join(", ")} ${fields.length > 1 ? "are" : "is"} invalid. Reload the page; if it persists, reset the workspace.`;
+  }
+  return err instanceof Error ? err.message : "This change could not be saved.";
+}
 
 type DemoContextValue = { state: DemoState; update: (change: (state: DemoState) => DemoState, message?: string) => void; ready: boolean; error: string; reset: () => void; notify: (message: string) => void; t: (key: string) => string };
 const DemoContext = createContext<DemoContextValue | null>(null);
@@ -65,7 +83,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
             setError("");
             if (message) setNotice(message);
           } catch (err) {
-            setError(err instanceof Error ? err.message : "This change could not be saved.");
+            setError(describeSaveFailure(err));
           }
         })();
       });

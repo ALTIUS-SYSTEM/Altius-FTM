@@ -95,6 +95,11 @@ fn sample_task(id: &str, org: &str, hub: &str) -> Task {
         status: TaskStatus::Assigned,
         assignee_id: None,
         created_at: chrono::Utc::now(),
+        day: None,
+        start_time: None,
+        flow: None,
+        priority: altius_core::TaskPriority::Normal,
+        notes: None,
         stops: vec![Stop {
             id: format!("{id}-stop-1"),
             sequence: 0,
@@ -312,6 +317,11 @@ async fn events_are_tenant_scoped_and_replay_safe() {
         status: TaskStatus::Assigned,
         assignee_id: None,
         created_at: chrono::Utc::now(),
+        day: None,
+        start_time: None,
+        flow: None,
+        priority: altius_core::TaskPriority::Normal,
+        notes: None,
         stops: vec![Stop {
             id: "stop-1".into(),
             sequence: 0,
