@@ -266,6 +266,18 @@ void main() {
     expect((await reopened.events()).length, greaterThanOrEqualTo(2));
     expect((await reopened.tripActive()), isTrue);
   });
+
+  test('schematic ETA matches 30 km/h straight-line fallback', () {
+    // Same point → 0 minutes.
+    expect(WorkStore.schematicEtaMinutes((lat: -6.2, lng: 106.8), (lat: -6.2, lng: 106.8)), 0);
+    // Blok M → Kuningan ≈ 5 km straight line → ~10 minutes at 30 km/h.
+    final eta = WorkStore.schematicEtaMinutes((lat: -6.2446, lng: 106.8067), (lat: -6.1944, lng: 106.8289));
+    expect(eta, greaterThan(5));
+    expect(eta, lessThan(20));
+    // Antipodean distance should be large but finite.
+    final far = WorkStore.schematicEtaMinutes((lat: 0, lng: 0), (lat: 0, lng: 180));
+    expect(far, greaterThan(10000));
+  });
 }
 
 /// Create a legacy SQLite file at the given version and set `user_version`.
