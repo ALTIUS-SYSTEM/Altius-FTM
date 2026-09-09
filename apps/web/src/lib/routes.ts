@@ -14,12 +14,12 @@ export const VIEW_PATHS = MODULES.flatMap(module => module.tabs.length ? module.
 export const PAGE_DESCRIPTIONS: Record<string, string> = {
   dashboard: "A clear view of your field operations. Every task, every team, one workspace.",
   tasks: "Plan the day, assign your team, and keep every delivery moving.",
-  route: "Build efficient journeys and compare planned visits with synthetic GPS trails.",
+  route: "Build efficient journeys and compare planned visits with recorded GPS trails.",
   lhs: "Laporan Harian Sopir · Review daily activity, visit evidence, and operational costs.",
   anomaly: "Compare app and vehicle GPS samples. Investigate signals, not assumptions.",
   flow: "Design the steps that turn field activity into consistent, reliable outcomes.",
   data: "Keep the operational data behind your field teams organized and ready.",
   "import-export": "Move synthetic data in and out of this browser. Nothing is uploaded.",
-  setting: "Manage your demo organization, people, and operating preferences.",
+  setting: "Manage your organization, people, and operating preferences.",
   billing: "Explore plans and sample invoices. No payments or subscriptions are created."
 };
