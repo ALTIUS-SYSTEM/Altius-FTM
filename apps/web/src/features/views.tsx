@@ -380,7 +380,15 @@ export function Anomaly() {
       .then(data => {
         if (live) setRows(data.reviews);
       })
-      .catch(e => setError(e instanceof Error ? e.message : "Failed to load monitoring data."))
+      .catch(e => {
+        // The API gates every /monitoring route behind super-admin, so an org
+        // admin is refused. "forbidden" on its own reads like a broken page;
+        // say which role is missing so it is actionable.
+        const message = e instanceof Error ? e.message : "";
+        setError(/forbidden/i.test(message)
+          ? "GPS review needs the super-admin realm role. Your account does not have it, so this page has nothing to show."
+          : (message || "Failed to load monitoring data."));
+      })
       .finally(() => setLoading(false));
     return () => { live = false; };
   }, []);
