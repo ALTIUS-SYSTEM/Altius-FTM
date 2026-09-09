@@ -756,6 +756,48 @@ class WorkStore {
     await _event(id, next.name, requestId: requestId, input: input, payload: {'proofDraft': await draft('proof:$id')});
   });
 
+  /// Geofence radius in meters. Matches the GPS accuracy threshold used for
+  /// event validation — within this distance a pending stop is "arrived".
+  static const geofenceRadiusMeters = 50.0;
+
+  /// Check the driver's current GPS position against all pending located
+  /// stops. Auto-advances the first matching stop to `arrived` and returns
+  /// its task id so the caller can show a confirmation. Returns null when no
+  /// stop is within the geofence or the trip isn't active.
+  ///
+  /// This is a foreground-only check — it does not run in the background.
+  /// The driver still taps "Report arrival" manually when GPS is unavailable
+  /// or the geofence is too tight for the environment (e.g. multi-storey).
+  Future<String?> checkGeofence() async {
+    if (!await tripActive()) return null;
+    final pos = await currentLocation();
+    if (pos == null) return null;
+    final pending = (await tasks()).where((t) =>
+        t.stage == TaskStage.assigned && t.isLocated).toList();
+    for (final task in pending) {
+      final distance = _haversineMeters(pos, (lat: task.lat!, lng: task.lng!));
+      if (distance <= geofenceRadiusMeters) {
+        try {
+          await advance(task.id, TaskStage.arrived);
+          return task.id;
+        } on Object {
+          // Sequence conflict (another task already arrived) — skip silently.
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  double _haversineMeters(({double lat, double lng}) a, ({double lat, double lng}) b) {
+    const r = 6371000.0;
+    final dLat = (b.lat - a.lat) * pi / 180;
+    final dLng = (b.lng - a.lng) * pi / 180;
+    final h = pow(sin(dLat / 2), 2) +
+        cos(a.lat * pi / 180) * cos(b.lat * pi / 180) * pow(sin(dLng / 2), 2);
+    return 2 * r * asin(sqrt(h));
+  }
+
   Future<void> createTask(String title, String address, {required String requestId}) => _write(() async {
     final input = <String, Object?>{'title': title.trim(), 'address': address.trim()};
     if (await _replayed(requestId, 'taskCreated', input)) { return; }

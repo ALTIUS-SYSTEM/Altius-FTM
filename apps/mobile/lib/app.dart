@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:share_plus/share_plus.dart';
 import 'core/data/work_store.dart';
 import 'core/l10n/strings.dart';
@@ -395,6 +396,8 @@ class _RouteTabState extends State<RouteTab> {
   bool _busy = false;
   String _plannedFor = '';
   Timer? _refreshTimer;
+  StreamSubscription<Position>? _geofenceSub;
+  bool _geofenceChecking = false;
 
   @override
   void initState() {
@@ -406,11 +409,40 @@ class _RouteTabState extends State<RouteTab> {
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted) setState(() {});
     });
+    // Geofence: listen for position changes while the Route tab is visible.
+    // When the driver comes within 50m of a pending stop, auto-record
+    // arrival. Foreground-only — no background tracking.
+    _startGeofence();
+  }
+
+  void _startGeofence() {
+    _geofenceSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 30, // meters — coarser than the geofence to save battery
+      ),
+    ).listen((_) => _checkGeofence());
+  }
+
+  Future<void> _checkGeofence() async {
+    if (_geofenceChecking || !mounted) return;
+    _geofenceChecking = true;
+    try {
+      final store = context.read<WorkCubit>().store;
+      final arrived = await store.checkGeofence();
+      if (arrived != null && mounted) {
+        // Refresh the cubit so the UI reflects the auto-arrival immediately.
+        await context.read<WorkCubit>().refresh();
+      }
+    } finally {
+      _geofenceChecking = false;
+    }
   }
 
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _geofenceSub?.cancel();
     super.dispose();
   }
 

@@ -278,6 +278,10 @@ void main() {
     final far = WorkStore.schematicEtaMinutes((lat: 0, lng: 0), (lat: 0, lng: 180));
     expect(far, greaterThan(10000));
   });
+
+  test('geofence radius is 50m, matching GPS accuracy threshold', () {
+    expect(WorkStore.geofenceRadiusMeters, 50.0);
+  });
 }
 
 /// Create a legacy SQLite file at the given version and set `user_version`.

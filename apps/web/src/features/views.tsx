@@ -172,12 +172,31 @@ export function RouteResult() {
   const km = route ? (route.totalMeters / 1000).toFixed(1) : null;
   const ordered = route ? [located[0]!, ...route.order.map(i => located[i + 1]!).filter(Boolean)] : [];
 
+  // Per-stop ETA as a clock time: cumulative leg seconds from now. Leg 0 is
+  // the drive TO ordered[1], so ordered[0] (origin) has ETA = now. With N
+  // stops there are N-1 legs.
+  const now = new Date();
+  const etaClock = (index: number): string | null => {
+    if (!route || index >= route.legSeconds.length + 1) return null;
+    const cumulative = route.legSeconds.slice(0, index).reduce((a, b) => a + b, 0);
+    const arrival = new Date(now.getTime() + cumulative * 1000);
+    return arrival.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+
   return <div className="grid-2">
     <Card title="Optimised route">
       {loading && <p>Planning route…</p>}
       {error && <div className="error-banner" role="alert">{error}</div>}
       {route && <>
-        <ol className="route-steps">{ordered.map((t, i) => <li key={t.id}><Badge tone="assigned">{i + 1}</Badge> {t.title}<small className="cell-sub">{t.address}</small></li>)}</ol>
+        <ol className="route-steps">{ordered.map((t, i) => {
+          const eta = etaClock(i);
+          const ata = t.arrival ?? null;
+          return <li key={t.id}>
+            <Badge tone="assigned">{i + 1}</Badge> {t.title}
+            <small className="cell-sub">{t.address}</small>
+            <small className="cell-sub">ETA: {eta ?? "—"} · ATA: {ata ?? "—"}</small>
+          </li>;
+        })}</ol>
         <div className="info-box">
           {km} km · {minutes} min drive time.
           {route.source === "live"
