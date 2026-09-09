@@ -35,6 +35,16 @@ function useIdentity(): { name: string; email: string; initials: string } {
 export function Shell({ path, children }: { path: string; children: ReactNode }) {
   const { state, update, t, error, reset } = useDemo();
   const identity = useIdentity();
+  // Rendered client-side: the server and the reader can sit in different time
+  // zones, and formatting during SSR would hydrate one date over another.
+  const [today, setToday] = useState({ date: "", weekday: "" });
+  useEffect(() => {
+    const now = new Date();
+    setToday({
+      date: now.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }),
+      weekday: now.toLocaleDateString(undefined, { weekday: "long" }),
+    });
+  }, []);
   // With Keycloak configured the workspace is backed by the API. Without it
   // nothing can load at all, so the demo notices only make sense in that case.
   const live = authConfig() !== null;
@@ -60,7 +70,7 @@ export function Shell({ path, children }: { path: string; children: ReactNode })
     {live ? null : <div className="demo-banner"><Badge tone="demo">{t("demo")}</Badge><span>Synthetic data · Saved in this browser only · No backend authorization</span><button onClick={() => setPanel("help")}>How this demo works <Icon name="arrow" size={15}/></button></div>}
     {error && <div className="error-banner" role="alert">{error}<button onClick={reset}>Reset demo</button></div>}
     {state.locale !== "en" && <div className="locale-note">Navigation and core controls: {LOCALES[state.locale]}. Untranslated operational details explicitly fall back to English.</div>}
-    <main id="main" tabIndex={-1}><div className="page-heading"><div><div className="eyebrow">{state.hub.toUpperCase()} HUB <span className="eyebrow-dot">/</span> FIELD TASK MANAGEMENT</div><h1>{title}</h1><p>{PAGE_DESCRIPTIONS[moduleKey]}</p></div><span className="date-chip">07 Sep 2026 <span>Monday</span></span></div>
+    <main id="main" tabIndex={-1}><div className="page-heading"><div><div className="eyebrow">{state.hub.toUpperCase()} HUB <span className="eyebrow-dot">/</span> FIELD TASK MANAGEMENT</div><h1>{title}</h1><p>{PAGE_DESCRIPTIONS[moduleKey]}</p></div><span className="date-chip">{today.date} <span>{today.weekday}</span></span></div>
     {module.tabs.length > 1 && <nav className="tabs" aria-label={`${t(moduleKey)} views`}>{module.tabs.map(tab => { const target = tab === "no-access" ? tab : `${module.key}/${tab}`; return <Link key={tab} href={`/${target}`} aria-current={path === target ? "page" : undefined} className={path === target ? "active" : ""}>{t(tab)}</Link>; })}</nav>}
     <div className="page-content">{children}</div><footer className="page-footer"><span>© 2026 Altius · Built for the way your team moves.</span><span>Demo v0.1 · Asia/Jakarta</span></footer></main></div>
     {navOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setNavOpen(false)}/>}
