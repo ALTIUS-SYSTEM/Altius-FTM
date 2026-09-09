@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createApiAdapter } from "@/data/api-adapter";
+import { STORAGE_KEY } from "@/data/adapter";
 import type { DemoTask } from "@/data/model";
 
 const sampleTask = (overrides: Partial<DemoTask> = {}): DemoTask => ({
@@ -129,5 +130,68 @@ describe("api adapter", () => {
     });
     // After create, lastLoaded holds the created task; a title edit must PUT.
     expect(calls.some((c) => c.url.includes("/api/v3/task/ALT-001") && c.init?.method === "PUT")).toBe(true);
+  });
+
+  /**
+   * The board filters every list on the selected hub, and tasks carry a hub
+   * *id*. With no hubs loaded the selector had no options and the selection
+   * stayed "", so tasks fetched from the API were all filtered out of view —
+   * an account with records in the database looked completely empty.
+   */
+  describe("hub selection", () => {
+    const stubApi = (opts: { hubs: unknown[]; ownHub?: string; taskHub?: string }) => {
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const json = (body: unknown) =>
+          new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+        if (url.endsWith("/api/v3/tasks"))
+          return json({
+            data: [
+              {
+                task: { id: "T-1", title: "Depot", hub_id: opts.taskHub ?? "jakarta", stage: "assigned", day: "2026-09-07" },
+                stops: [{ id: "S-1", address: "Jl. Sudirman" }],
+              },
+            ],
+          });
+        if (url.endsWith("/api/v3/hubs")) return json({ data: opts.hubs });
+        if (url.endsWith("/api/v3/auth/me"))
+          return json({ data: { organization: "altius", hub: opts.ownHub ?? "jakarta" } });
+        throw new Error(`unexpected ${url}`);
+      }) as typeof fetch;
+      return createApiAdapter("https://api.test", async () => "token");
+    };
+
+    // Postgres serialises the row as-is; TypeDB uses its attribute names.
+    const pgHub = (id: string, name: string) => ({ hub: { id, name, lat: null, lng: null } });
+    const tdbHub = (id: string, name: string) => ({ hub: { "hub-id": id, "display-name": name } });
+
+    it("loads hubs as records and selects this account's hub", async () => {
+      const state = await stubApi({ hubs: [pgHub("jakarta", "Jakarta"), pgHub("bandung", "Bandung")], ownHub: "bandung" }).load();
+      expect(state.records.filter(r => r.kind === "hub").map(r => ({ id: r.id, name: r.name }))).toEqual([
+        { id: "jakarta", name: "Jakarta" },
+        { id: "bandung", name: "Bandung" },
+      ]);
+      expect(state.hub).toBe("bandung");
+    });
+
+    it("reads the TypeDB attribute names too", async () => {
+      const state = await stubApi({ hubs: [tdbHub("jakarta", "Jakarta")] }).load();
+      expect(state.records.filter(r => r.kind === "hub")[0]).toMatchObject({ id: "jakarta", name: "Jakarta" });
+    });
+
+    it("selects a hub the loaded tasks can actually match", async () => {
+      const state = await stubApi({ hubs: [pgHub("jakarta", "Jakarta")] }).load();
+      expect(state.tasks).toHaveLength(1);
+      expect(state.tasks.filter(t => t.hub === state.hub)).toHaveLength(1);
+    });
+
+    it("replaces a stored hub that no longer exists", async () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ ...(await stubApi({ hubs: [pgHub("jakarta", "Jakarta")] }).load()), hub: "surabaya", tasks: [] }),
+      );
+      const state = await stubApi({ hubs: [pgHub("jakarta", "Jakarta")], ownHub: "" }).load();
+      expect(state.hub).toBe("jakarta");
+    });
   });
 });
