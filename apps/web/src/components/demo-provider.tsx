@@ -42,7 +42,7 @@ function describeSaveFailure(err: unknown): string {
   return err instanceof Error ? err.message : "This change could not be saved.";
 }
 
-type DemoContextValue = { state: DemoState; update: (change: (state: DemoState) => DemoState, message?: string) => void; ready: boolean; error: string; reset: () => void; notify: (message: string) => void; t: (key: string) => string };
+type DemoContextValue = { state: DemoState; update: (change: (state: DemoState) => DemoState, message?: string) => void; ready: boolean; error: string; reset: () => void; reload: () => Promise<void>; notify: (message: string) => void; t: (key: string) => string };
 const DemoContext = createContext<DemoContextValue | null>(null);
 export function DemoProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(createEmptyState);
@@ -54,20 +54,36 @@ export function DemoProvider({ children }: { children: ReactNode }) {
   // or discard its result when a higher-priority update rebases, which would
   // persist a state the UI never committed.
   const { adapter, configError } = useMemo(() => pickAdapter(), []);
-  useEffect(() => {
+  // Fetch the workspace from the API. Exposed because tokens live in memory
+  // only: a reload starts signed out, this runs and fails, and the session is
+  // then restored silently *afterwards*. Without a way to ask again, the tab
+  // kept the empty state it built before the token existed — the account was
+  // signed in, the shell showed the user's name, and every record already in
+  // the database was invisible until they signed in from scratch.
+  const reload = useCallback(async () => {
     if (!adapter) { setError(configError); setReady(true); return; }
-    let active = true;
-    adapter.load().then(data => { if (active) { setState(data); setReady(true); } }).catch((err: unknown) => {
-      if (!active) return;
+    try {
+      const data = await adapter.load();
+      setState(current => ({
+        ...data,
+        // A sign-in completing right now is newer than whatever the last save
+        // wrote, so it wins; on a plain mount there is no such sign-in and the
+        // stored values stand.
+        session: current.session || data.session,
+        role: current.session ? current.role : data.role,
+      }));
+      setError("");
+    } catch (err: unknown) {
       // Having no token before sign-in is the expected pre-login state, not a
       // failure — surfacing it as an error banner on the sign-in screen tells
       // the user something is broken when nothing is.
       const message = err instanceof Error ? err.message : "";
       setError(message === "not authenticated" ? "" : (message || "The workspace could not load from the API."));
+    } finally {
       setReady(true);
-    });
-    return () => { active = false; };
+    }
   }, [adapter, configError]);
+  useEffect(() => { void reload(); }, [reload]);
   useEffect(() => { if (notice) { const timer = setTimeout(() => setNotice(""), 5000); return () => clearTimeout(timer); } }, [notice]);
   useEffect(() => { document.documentElement.lang = state.locale; }, [state.locale]);
   const update = useCallback((change: (current: DemoState) => DemoState, message?: string) => {
@@ -94,7 +110,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
     if (!adapter) { setError(configError); return; }
     try { setState(adapter.reset()); setError(""); setNotice("Workspace reset."); } catch { setError("Browser storage is unavailable. Check storage permissions."); }
   };
-  return <DemoContext.Provider value={{ state, update, ready, error, reset, notify: setNotice, t: key => translate(state.locale, key) }}>{children}<div aria-live="polite" role="status" className={notice ? "toast visible" : "toast"}>{notice}</div></DemoContext.Provider>;
+  return <DemoContext.Provider value={{ state, update, ready, error, reset, reload, notify: setNotice, t: key => translate(state.locale, key) }}>{children}<div aria-live="polite" role="status" className={notice ? "toast visible" : "toast"}>{notice}</div></DemoContext.Provider>;
 }
 export function useDemo() {
   const context = useContext(DemoContext);
