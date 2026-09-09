@@ -37,12 +37,13 @@ export function Shell({ path, children }: { path: string; children: ReactNode })
   const identity = useIdentity();
   // Rendered client-side: the server and the reader can sit in different time
   // zones, and formatting during SSR would hydrate one date over another.
-  const [today, setToday] = useState({ date: "", weekday: "" });
+  const [today, setToday] = useState({ date: "", weekday: "", zone: "" });
   useEffect(() => {
     const now = new Date();
     setToday({
       date: now.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }),
       weekday: now.toLocaleDateString(undefined, { weekday: "long" }),
+      zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
   }, []);
   // With Keycloak configured the workspace is backed by the API. Without it
@@ -72,9 +73,9 @@ export function Shell({ path, children }: { path: string; children: ReactNode })
     {state.locale !== "en" && <div className="locale-note">Navigation and core controls: {LOCALES[state.locale]}. Untranslated operational details explicitly fall back to English.</div>}
     <main id="main" tabIndex={-1}><div className="page-heading"><div><div className="eyebrow">{state.hub.toUpperCase()} HUB <span className="eyebrow-dot">/</span> FIELD TASK MANAGEMENT</div><h1>{title}</h1><p>{PAGE_DESCRIPTIONS[moduleKey]}</p></div><span className="date-chip">{today.date} <span>{today.weekday}</span></span></div>
     {module.tabs.length > 1 && <nav className="tabs" aria-label={`${t(moduleKey)} views`}>{module.tabs.map(tab => { const target = tab === "no-access" ? tab : `${module.key}/${tab}`; return <Link key={tab} href={`/${target}`} aria-current={path === target ? "page" : undefined} className={path === target ? "active" : ""}>{t(tab)}</Link>; })}</nav>}
-    <div className="page-content">{children}</div><footer className="page-footer"><span>© 2026 Altius · Built for the way your team moves.</span><span>Demo v0.1 · Asia/Jakarta</span></footer></main></div>
+    <div className="page-content">{children}</div><footer className="page-footer"><span>© 2026 Altius · Built for the way your team moves.</span><span>{today.zone}</span></footer></main></div>
     {navOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setNavOpen(false)}/>}
-    {panel && <Modal title={panel === "profile" ? "Demo profile" : panel === "notifications" ? "Operations inbox" : "Your local demo workspace"} onClose={() => setPanel("")}>
+    {panel && <Modal title={panel === "profile" ? "Profile" : panel === "notifications" ? "Operations inbox" : "About this workspace"} onClose={() => setPanel("")}>
       {panel === "profile" ? <><div className="profile-summary"><span className="avatar large">{live ? identity.initials : "AM"}</span><div><h3>{live ? identity.name : "Alex Morgan"}</h3><p>{live ? (identity.email || "no email on this account") : "alex@example.test"}</p></div></div>{live
       ? <><p>Signed in through Keycloak. Your role comes from the access token and is enforced by the API — it cannot be changed here.</p><Field label="Role"><input value={state.role} readOnly aria-readonly="true"/></Field><div className="modal-actions"><button onClick={() => { const cfg = authConfig(); if (cfg) endSession(cfg, window.location.origin); }}>Sign out</button><button className="primary" onClick={() => setPanel("")}>Done</button></div></>
       : <><p>Role selection changes the displayed persona only. It does not enforce authorization.</p><Field label="Demo persona"><select value={state.role} onChange={event => update(current => ({ ...current, role: event.target.value as DemoState["role"] }))}>{["Admin", "Supervisor", "Lead"].map(role => <option key={role}>{role}</option>)}</select></Field><div className="modal-actions"><button onClick={() => update(current => ({ ...current, session: false }))}>Leave demo session</button><button className="primary" onClick={() => setPanel("")}>Done</button></div></>}</> : panel === "notifications" ? <div className="stack"><Link className="inbox-item" href="/anomaly" onClick={() => setPanel("")}><Badge tone="failed">Review</Badge><div><strong>GPS variance requires review</strong><p>3 synthetic app/vehicle comparisons exceed the demo threshold.</p></div></Link><Link className="inbox-item" href="/lhs" onClick={() => setPanel("")}><Badge tone="assigned">LHS</Badge><div><strong>Daily driver reports are ready</strong><p>Review visit activity and sample operational expenses.</p></div></Link></div> : <div className="stack">{live

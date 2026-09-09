@@ -115,3 +115,92 @@ async fn garbage_token_rejected() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
+
+/// Every method the router serves has to survive a browser preflight.
+///
+/// Allowing only GET and POST let creating a task work while every *edit*
+/// failed: the browser asked whether it could send a PUT, got an allow-list
+/// without it, and cancelled the request. Nothing reached the API, so nothing
+/// appeared in its logs either — the change simply vanished. Task edits,
+/// report review and the whole admin section (hubs, teams, roles) went this
+/// way. Asserted against the real router so a new verb cannot be routed
+/// without also being allowed here.
+#[tokio::test]
+async fn cors_preflight_allows_every_method_the_router_serves() {
+    let state = test_state();
+    let mut config = state.config.clone();
+    config.cors_origins = vec!["https://web.example".into()];
+    let app = crate::routes::router()
+        .with_state(state)
+        .layer(crate::cors_layer(&config));
+
+    for (method, path) in [
+        ("GET", "/api/v3/tasks"),
+        ("POST", "/api/v3/task-create"),
+        ("PUT", "/api/v3/task/abc"),
+        ("PATCH", "/api/v3/reports/driver/2026-01-01"),
+        ("DELETE", "/api/v3/task/abc"),
+    ] {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::options(path)
+                    .header("origin", "https://web.example")
+                    .header("access-control-request-method", method)
+                    .header(
+                        "access-control-request-headers",
+                        "authorization,content-type",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let allowed = res
+            .headers()
+            .get("access-control-allow-methods")
+            .unwrap_or_else(|| panic!("{method} {path}: preflight returned no allow-methods"))
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            allowed.split(',').any(|m| m.trim() == method),
+            "{method} {path}: browser would cancel this request; allow-methods was {allowed}"
+        );
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .map(|v| v.to_str().unwrap()),
+            Some("https://web.example"),
+            "{method} {path}: origin not echoed back"
+        );
+    }
+}
+
+/// The allowlist is an allowlist: an origin outside `CORS_ORIGINS` gets no
+/// `access-control-allow-origin`, so the browser refuses to hand it the body.
+#[tokio::test]
+async fn cors_preflight_refuses_an_unlisted_origin() {
+    let state = test_state();
+    let mut config = state.config.clone();
+    config.cors_origins = vec!["https://web.example".into()];
+    let app = crate::routes::router()
+        .with_state(state)
+        .layer(crate::cors_layer(&config));
+
+    let res = app
+        .oneshot(
+            Request::options("/api/v3/task/abc")
+                .header("origin", "https://evil.example")
+                .header("access-control-request-method", "PUT")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        res.headers().get("access-control-allow-origin").is_none(),
+        "an unlisted origin was granted access"
+    );
+}

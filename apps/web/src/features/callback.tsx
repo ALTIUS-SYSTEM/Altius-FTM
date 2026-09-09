@@ -39,7 +39,7 @@ export function extractRole(claims: JwtClaims): DemoState["role"] {
 }
 
 export function Callback() {
-  const { update, ready } = useDemo();
+  const { update, ready, reload } = useDemo();
   const router = useRouter();
   const [error, setError] = useState("");
   // The effect consumes the query string and then strips it, so it is not safe
@@ -84,17 +84,22 @@ export function Callback() {
     }
     const redirectUri = `${window.location.origin}/callback`;
     finishLogin(cfg, code, redirectUri, params.get("state"))
-      .then((token) => {
+      .then(async (token) => {
         const claims = token ? decodeJwt(token) : {};
         const role = extractRole(claims);
         update((s) => ({ ...s, session: true, role }));
         // A successful sign-in means the SSO session is good, so allow silent
         // restore again on the next reload.
         silentAuth.reset();
+        // The provider's first load ran before this token existed and came
+        // back empty. Nothing remounts it on the way out of here — the
+        // redirect below is client-side — so ask again now, or the workspace
+        // stays blank while signed in.
+        await reload();
         router.replace(silentAuth.takeReturn() ?? "/dashboard/task");
       })
       .catch((e: Error) => setError(e.message));
-  }, [ready, update, router]);
+  }, [ready, update, reload, router]);
 
   if (error) {
     return (
