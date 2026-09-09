@@ -27,6 +27,24 @@ export async function call<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** API rows are another trust boundary: coerce rather than assume. */
+/**
+ * First usable value among several spellings of the same field.
+ *
+ * The two stores name their columns differently and the API passes each
+ * through untouched: Postgres serialises its rows (`hub_id`, `display_name`),
+ * TypeDB its attributes (`hub-id`, `display-name`). Readers that knew only one
+ * spelling returned empty strings against the other backend, which is how the
+ * admin screens came to list rows with blank names against the default
+ * Postgres deployment.
+ */
+export const pick = (row: Record<string, unknown>, ...keys: string[]): unknown => {
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return undefined;
+};
+
 export const asString = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
 export const asNumber = (v: unknown): number => {
   const n = typeof v === "number" ? v : Number(v);

@@ -1,6 +1,6 @@
 "use client";
 
-import { call, asString, asNumber } from "./api-client";
+import { call, asString, asNumber, pick } from "./api-client";
 
 export interface Hub { id: string; name: string; lat: number; lng: number }
 export interface Team { id: string; name: string; shift: string; hubId: string; members: string[] }
@@ -10,10 +10,10 @@ export const listHubs = async (): Promise<Hub[]> => {
   return (rows ?? []).map(r => {
     const hub = (r.hub ?? r) as Record<string, unknown>;
     return {
-      id: asString(hub["hub-id"]),
-      name: asString(hub["display-name"]),
-      lat: asNumber(hub.latitude),
-      lng: asNumber(hub.longitude),
+      id: asString(pick(hub, "id", "hub-id", "hub_id")),
+      name: asString(pick(hub, "name", "display-name", "display_name")),
+      lat: asNumber(pick(hub, "lat", "latitude")),
+      lng: asNumber(pick(hub, "lng", "longitude")),
     };
   });
 };
@@ -36,11 +36,16 @@ export const listTeams = async (): Promise<Team[]> => {
     const team = (r.team ?? {}) as Record<string, unknown>;
     const members = Array.isArray(r.members) ? (r.members as Record<string, unknown>[]) : [];
     return {
-      id: asString(team["team-id"]),
-      name: asString(team["display-name"]),
+      id: asString(pick(team, "id", "team-id", "team_id")),
+      name: asString(pick(team, "name", "display-name", "display_name")),
       shift: asString(team.shift),
       hubId: asString(r.hub),
-      members: members.map(m => asString(((m.user ?? {}) as Record<string, unknown>)["user-sub"])).filter(Boolean),
+      members: members
+        .map(m => {
+          const u = (m.user ?? m) as Record<string, unknown>;
+          return asString(pick(u, "sub", "user-sub", "user_sub"));
+        })
+        .filter(Boolean),
     };
   });
 };
@@ -70,15 +75,15 @@ export const listUsers = async (): Promise<User[]> => {
   const rows = await call<Record<string, unknown>[]>('/api/v3/users');
   return (rows ?? []).map(r => {
     const user = (r.user ?? r) as Record<string, unknown>;
-    const role = user['role-name'];
+    const role = pick(user, 'role_name', 'role-name', 'roles');
     const roles = Array.isArray(role)
       ? role.map(String)
       : typeof role === 'string'
         ? [role]
         : [];
     return {
-      id: asString(user['user-sub']),
-      name: asString(user['display-name']),
+      id: asString(pick(user, 'sub', 'user-sub', 'user_sub')),
+      name: asString(pick(user, 'display_name', 'display-name', 'name', 'email', 'sub', 'user-sub')),
       roles,
     };
   });

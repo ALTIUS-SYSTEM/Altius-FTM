@@ -3,7 +3,7 @@
 import { z } from "zod";
 import type { DemoAdapter } from "./adapter";
 import { createLocalAdapter, STORAGE_KEY } from "./adapter";
-import type { DemoState, DemoTask, DemoTaskStatus } from "./model";
+import type { DemoRecord, DemoState, DemoTask, DemoTaskStatus } from "./model";
 import { createEmptyState, demoTaskSchema } from "./model";
 
 /**
@@ -256,6 +256,31 @@ export const createApiAdapter = (
         if (_stopId) stopIds.set(parsed.data.id, _stopId);
         return [parsed.data];
       });
+      // Hubs decide what the board shows. Every task carries a hub id and
+      // every list filters on the selected one, so loading tasks without also
+      // loading hubs left the selector empty, the selection at "", and every
+      // row the API had just returned filtered out of view.
+      const hubs = await request("/api/v3/hubs")
+        .then(res => (Array.isArray(res.data) ? res.data : []))
+        .catch(() => [] as unknown[]);
+      const hubRecords: DemoRecord[] = hubs.flatMap(row => {
+        const wrapper = (row ?? {}) as Record<string, unknown>;
+        const hub = (wrapper.hub ?? wrapper) as Record<string, unknown>;
+        const id = String(pick(hub, "id", "hub-id", "hub_id") ?? "");
+        if (!id) return [];
+        return [{
+          id,
+          kind: "hub",
+          name: String(pick(hub, "name", "display-name", "display_name") ?? id),
+          detail: "",
+          hub: id,
+          status: "",
+          extra: "",
+          archived: false,
+        }];
+      });
+      // The hub this account belongs to, for a first visit with nothing stored.
+      const ownHub = await resolveScope().then(scope => scope.hubId).catch(() => "");
       const base = createEmptyState();
       // Distinguish "nothing stored" from "stored data rejected": swallowing
       // both discarded every persisted preference, record and permission with
@@ -272,7 +297,21 @@ export const createApiAdapter = (
         return base;
       });
       applyTaskSnapshot(tasks, stopIds);
-      return { ...base, ...localState, tasks };
+      const merged = { ...base, ...localState, tasks };
+      const known = new Set(hubRecords.map(hub => hub.id));
+      return {
+        ...merged,
+        // The API owns the hub list; a locally stored copy is only ever stale.
+        records: [...hubRecords, ...merged.records.filter(record => record.kind !== "hub")],
+        // Keep the stored choice while it still exists, otherwise fall back to
+        // this account's own hub, then to whatever the org has. Leaving a hub
+        // that was renamed or removed selected hides the whole board.
+        hub: known.has(merged.hub)
+          ? merged.hub
+          : known.has(ownHub)
+            ? ownHub
+            : (hubRecords[0]?.id ?? merged.hub),
+      };
     },
     async save(state) {
       const prefs = { ...createEmptyState(), ...state, tasks: [] };
