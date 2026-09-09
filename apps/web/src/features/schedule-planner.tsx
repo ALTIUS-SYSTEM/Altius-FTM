@@ -3,151 +3,106 @@
 import { useMemo, useState } from "react";
 import { useDemo } from "@/components/demo-provider";
 import { Badge, Card, Icon, Table } from "@/components/ui";
-import { today, DRIVERS } from "@/data/model";
+import { today, STATUS_LABELS } from "@/data/model";
 import { csvCell, downloadText } from "@/data/adapter";
+
+/**
+ * The day's schedule, read straight off the tasks.
+ *
+ * Every column here is a field somebody typed into the task editor and the API
+ * stored. This screen used to derive an "activity", a vehicle, a quantity and
+ * a set of Indonesian operating notes from `hash(task.id)` — stable per task,
+ * plausible on screen, and entirely invented. It was exportable to CSV, so the
+ * fiction travelled into spreadsheets that people plan real days from.
+ */
 
 interface PlanRow {
   id: string;
   date: string;
-  activity: string;
+  time: string;
+  flow: string;
   customer: string;
-  fleet: string;
   staff: string;
   origin: string;
   destination: string;
-  quantity: string;
+  priority: string;
   notes: string;
-  tone: string;
-  category: "fleet" | "packing";
+  status: keyof typeof STATUS_LABELS;
 }
 
-const ACTIVITIES = [
-  { key: "FCL", tone: "failed", fleet: "Tronton 1x40HC", unit: "FCL", category: "fleet" as const },
-  { key: "LTL", tone: "assigned", fleet: "CDD Box Std", unit: "LTL", category: "fleet" as const },
-  { key: "PICKUP", tone: "completed", fleet: "Traga Box", unit: "koli", category: "fleet" as const },
-  { key: "DROPPING", tone: "in-progress", fleet: "CDD Box Std", unit: "koli", category: "fleet" as const },
-  { key: "SHUTTLE", tone: "unassigned", fleet: "Traga Box", unit: "FCL", category: "fleet" as const },
-  { key: "PACKING KAYU", tone: "failed", unit: "koli", category: "packing" as const },
-  { key: "UKUR TIMBANAN", tone: "completed", unit: "koli", category: "packing" as const },
-  { key: "WRAPPING ONLY", tone: "assigned", unit: "koli", category: "packing" as const },
-];
+/** Blank cells read better than empty ones, and say "not set" out loud. */
+const orDash = (value: string) => (value.trim() ? value : "—");
 
-const hash = (s: string) => {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h;
-};
-
-const quantityFor = (unit: string, h: number) => {
-  if (unit === "FCL" || unit === "LTL") return `1 ${unit}`;
-  if (unit === "koli") {
-    const n = (h % 20) + 1;
-    return `${n} koli`;
-  }
-  return "1";
-};
-
-const notesFor = (activity: string, destination: string) => {
-  const map: Record<string, string> = {
-    FCL: "Tujuan stuffing luar",
-    LTL: "Respon 11.00, masuk dalam perencanaan armada",
-    PICKUP: "Titip kembali DO / resi",
-    DROPPING: "Konfirmasi penerima sebelum sampai",
-    SHUTTLE: " Antar barang ke pool berikutnya",
-    "PACKING KAYU": "Kemas kayu + fasten di truk",
-    "UKUR TIMBANAN": "Timbang bersama petugas jembatan timbang",
-    "WRAPPING ONLY": "Lapisi stretch wrap, tidak perlu packing kayu",
-  };
-  return map[activity] ?? `Operasional ke ${destination}`;
-};
-
-const usePlanRows = (hub: string): PlanRow[] => {
+const usePlanRows = (): PlanRow[] => {
   const { state } = useDemo();
-  return useMemo(() => {
-    const rows: PlanRow[] = [];
-    let index = 0;
-    for (const task of state.tasks.filter((t) => t.hub === state.hub)) {
-      const h = hash(task.id + String(index));
-      const activity = ACTIVITIES[h % ACTIVITIES.length];
-      const driverIndex = h % DRIVERS.length;
-      const staff = task.assignee || DRIVERS[driverIndex];
-      const fleet = activity.fleet ?? "-";
-      const quantity = quantityFor(activity.unit, h);
-      const notes = task.notes || notesFor(activity.key, task.address);
-      rows.push({
-        id: `${task.id}-${index}`,
-        date: task.date || today(),
-        activity: activity.key,
-        customer: task.title,
-        fleet,
-        staff,
-        origin: activity.category === "fleet" ? hub : "-",
-        destination: task.address || task.hub,
-        quantity,
-        notes,
-        tone: activity.tone,
-        category: activity.category,
-      });
-      index++;
-    }
-    return rows.sort((a, b) => a.activity.localeCompare(b.activity));
-  }, [state.tasks, state.hub, hub]);
+  return useMemo(
+    () =>
+      state.tasks
+        .filter((task) => task.hub === state.hub)
+        .map((task) => ({
+          id: task.id,
+          date: task.date || today(),
+          time: task.time,
+          flow: task.flow,
+          customer: task.title,
+          staff: task.assignee,
+          origin: task.hub,
+          destination: task.address,
+          priority: task.priority,
+          notes: task.notes,
+          status: task.status,
+        }))
+        // A schedule reads in the order the day happens.
+        .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)),
+    [state.tasks, state.hub],
+  );
 };
 
 export function Schedule() {
-  const { state } = useDemo();
-  const rows = usePlanRows(state.hub);
+  const rows = usePlanRows();
   const [search, setSearch] = useState("");
-  const [mode, setMode] = useState<"all" | "fleet" | "packing">("all");
-  const [activityFilter, setActivityFilter] = useState<string>("all");
+  const [flowFilter, setFlowFilter] = useState<string>("all");
 
-  const allActivities = useMemo(
-    () => Array.from(new Set(rows.map((r) => r.activity))).sort((a, b) => a.localeCompare(b)),
+  // Only the workflows actually present, so the filter can never offer one
+  // that would empty the table.
+  const flows = useMemo(
+    () => Array.from(new Set(rows.map((r) => r.flow).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
     [rows],
   );
 
-  const filtered = useMemo(() => {
-    return rows.filter((r) => {
-      if (mode !== "all" && r.category !== mode) return false;
-      if (activityFilter !== "all" && r.activity !== activityFilter) return false;
-      if (!search) return true;
-      const q = search.toLowerCase();
-      return (
-        r.customer.toLowerCase().includes(q) ||
-        r.destination.toLowerCase().includes(q) ||
-        r.activity.toLowerCase().includes(q) ||
-        r.staff.toLowerCase().includes(q)
-      );
-    });
-  }, [rows, mode, activityFilter, search]);
+  const filtered = useMemo(
+    () =>
+      rows.filter((r) => {
+        if (flowFilter !== "all" && r.flow !== flowFilter) return false;
+        if (!search) return true;
+        const q = search.toLowerCase();
+        // Every field here is optional in the model, so match defensively:
+        // an unassigned task has no staff, and reading it as a string threw.
+        return [r.customer, r.destination, r.staff, r.flow].some((field) =>
+          (field ?? "").toLowerCase().includes(q),
+        );
+      }),
+    [rows, flowFilter, search],
+  );
 
-  const fleetMode = mode === "all" || mode === "fleet";
-
-  const headings = [
-    "Tanggal",
-    "Aktivitas",
-    "Customer",
-    ...(fleetMode ? ["Armada", "Staff", "Dari"] : []),
-    "Tujuan",
-    "Jumlah",
-    "Catatan",
-  ];
+  const headings = ["Tanggal", "Jam", "Alur kerja", "Customer", "Staff", "Dari", "Tujuan", "Prioritas", "Catatan"];
 
   // Every cell goes through csvCell: customer/destination/notes carry
   // backend-supplied text, so an unquoted join lets a task title inject
   // spreadsheet formulas or forge extra rows with an embedded comma/newline.
   const csv = () => {
     const rows = [
-      ["Date", "Activity", "Customer", "Fleet", "Staff", "Origin", "Destination", "Quantity", "Notes"],
+      ["Date", "Time", "Workflow", "Customer", "Staff", "Origin", "Destination", "Priority", "Status", "Notes"],
       ...filtered.map((r) => [
         r.date,
-        r.activity,
+        r.time,
+        r.flow,
         r.customer,
-        r.fleet,
         r.staff,
         r.origin,
         r.destination,
-        r.quantity,
+        r.priority,
+        STATUS_LABELS[r.status],
         r.notes,
       ]),
     ];
@@ -158,20 +113,12 @@ export function Schedule() {
     <>
       <div className="toolbar">
         <label className="field">
-          <span>Tipe jadwal</span>
-          <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
+          <span>Alur kerja</span>
+          <select value={flowFilter} onChange={(e) => setFlowFilter(e.target.value)}>
             <option value="all">Semua</option>
-            <option value="fleet">Fleet</option>
-            <option value="packing">Packing</option>
-          </select>
-        </label>
-        <label className="field">
-          <span>Aktivitas</span>
-          <select value={activityFilter} onChange={(e) => setActivityFilter(e.target.value)}>
-            <option value="all">Semua</option>
-            {allActivities.map((a) => (
-              <option key={a} value={a}>
-                {a}
+            {flows.map((flow) => (
+              <option key={flow} value={flow}>
+                {flow}
               </option>
             ))}
           </select>
@@ -197,20 +144,16 @@ export function Schedule() {
             {filtered.map((r) => (
               <tr key={r.id}>
                 <td>{r.date}</td>
+                <td>{orDash(r.time)}</td>
                 <td>
-                  <Badge tone={r.tone}>{r.activity}</Badge>
+                  <Badge tone={r.status}>{orDash(r.flow)}</Badge>
                 </td>
                 <td>{r.customer}</td>
-                {fleetMode && (
-                  <>
-                    <td>{r.fleet}</td>
-                    <td>{r.staff}</td>
-                    <td>{r.origin}</td>
-                  </>
-                )}
+                <td>{orDash(r.staff)}</td>
+                <td>{r.origin}</td>
                 <td>{r.destination}</td>
-                <td>{r.quantity}</td>
-                <td>{r.notes}</td>
+                <td>{r.priority}</td>
+                <td>{orDash(r.notes)}</td>
               </tr>
             ))}
           </Table>
@@ -220,13 +163,16 @@ export function Schedule() {
               <Icon name="tasks" size={32} />
             </div>
             <h3>Jadwal tidak ditemukan</h3>
-            <p>Coba ubah filter pencarian atau mode tampilan.</p>
+            <p>
+              {rows.length
+                ? "Coba ubah filter pencarian."
+                : "Belum ada tugas di hub ini. Buat tugas di papan tugas untuk mengisi jadwal."}
+            </p>
           </div>
         )}
       </Card>
       <div className="info-box">
-        Tabel ini menyatukan rencana fleet dan packing harian. Data berasal dari daftar tugas demo yang dipetakan
-        otomatis ke aktivitas operasional.
+        Jadwal ini dibaca langsung dari daftar tugas hub yang sedang dipilih. Warna lencana mengikuti status tugas.
       </div>
     </>
   );
