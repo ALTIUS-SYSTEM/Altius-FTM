@@ -275,7 +275,20 @@ fn cors_layer(config: &Config) -> CorsLayer {
         .filter_map(|o| HeaderValue::from_str(o).ok())
         .collect();
     let layer = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        // Every method the router serves. GET/POST alone silently broke every
+        // edit made from a browser: the preflight for a PUT, PATCH or DELETE
+        // came back without that method in the list, so the browser cancelled
+        // the request before it was sent. Task edits, report review and the
+        // whole admin section (hubs, teams, roles) failed this way, and the
+        // API never saw them — no error reached its logs either.
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([
             axum::http::header::AUTHORIZATION,
             axum::http::header::CONTENT_TYPE,
